@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  workana-autopilot:
+    build: .
+    container_name: workana-autopilot
+    restart: unless-stopped
+    ports:
+      - "3500:3500"
+    environment:
+      - WORKANA_EMAIL=${WORKANA_EMAIL}
+      - WORKANA_PASSWORD=${WORKANA_PASSWORD}
+      - PORT=3500
+      - HEADLESS=true
+      - USER_DATA_DIR=/app/chrome-data
+    volumes:
+      # Persistir sesión del navegador entre reinicios
+      - chrome-data:/app/chrome-data
+    # Necesario para Chromium en Docker
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+
+volumes:
+  chrome-data:
