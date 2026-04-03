@@ -209,87 +209,41 @@
     },
     {
       "parameters": {
-        "operation": "create",
-        "tableId": "workana_projects",
-        "fieldsUi": {
-          "fieldValues": [
+        "method": "POST",
+        "url": "={{$('CONFIG').item.json.SUPABASE_URL}}/rest/v1/workana_projects",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "fieldName": "workana_url",
-              "fieldValue": "={{$json.project.workana_url}}"
+              "name": "apikey",
+              "value": "={{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "title",
-              "fieldValue": "={{$json.project.title}}"
+              "name": "Authorization",
+              "value": "=Bearer {{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "description",
-              "fieldValue": "={{$json.project.description}}"
+              "name": "Content-Type",
+              "value": "application/json"
             },
             {
-              "fieldName": "category",
-              "fieldValue": "={{$json.project.category}}"
-            },
-            {
-              "fieldName": "budget_text",
-              "fieldValue": "={{$json.project.budget_text}}"
-            },
-            {
-              "fieldName": "skills",
-              "fieldValue": "={{$json.project.skills}}"
-            },
-            {
-              "fieldName": "client_name",
-              "fieldValue": "={{$json.project.client_name}}"
-            },
-            {
-              "fieldName": "client_country",
-              "fieldValue": "={{$json.project.client_country}}"
-            },
-            {
-              "fieldName": "client_rating",
-              "fieldValue": "={{$json.project.client_rating}}"
-            },
-            {
-              "fieldName": "client_verified",
-              "fieldValue": "={{$json.project.client_verified}}"
-            },
-            {
-              "fieldName": "proposals_count",
-              "fieldValue": "={{$json.project.proposals_count}}"
-            },
-            {
-              "fieldName": "publication_date",
-              "fieldValue": "={{$json.project.publication_date}}"
-            },
-            {
-              "fieldName": "relevance_score",
-              "fieldValue": "={{$json.project.relevance_score}}"
-            },
-            {
-              "fieldName": "red_flags",
-              "fieldValue": "={{$json.project.red_flags}}"
-            },
-            {
-              "fieldName": "status",
-              "fieldValue": "={{$json.project.status}}"
+              "name": "Prefer",
+              "value": "return=representation"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.project) }}"
       },
       "id": "save-project",
       "name": "Guardar Proyecto",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         2530,
         0
-      ],
-      "credentials": {
-        "supabaseApi": {
-          "id": "",
-          "name": "Supabase crm-vortek"
-        }
-      }
+      ]
     },
     {
       "parameters": {
@@ -306,59 +260,41 @@
     },
     {
       "parameters": {
-        "operation": "create",
-        "tableId": "workana_proposals",
-        "fieldsUi": {
-          "fieldValues": [
+        "method": "POST",
+        "url": "={{$('CONFIG').item.json.SUPABASE_URL}}/rest/v1/workana_proposals",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "fieldName": "project_id",
-              "fieldValue": "={{$json.project_id}}"
+              "name": "apikey",
+              "value": "={{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "proposal_text",
-              "fieldValue": "={{$json.proposal_text}}"
+              "name": "Authorization",
+              "value": "=Bearer {{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "questions_text",
-              "fieldValue": "={{$json.questions_text}}"
+              "name": "Content-Type",
+              "value": "application/json"
             },
             {
-              "fieldName": "budget_suggested",
-              "fieldValue": "={{$json.budget_suggested}}"
-            },
-            {
-              "fieldName": "delivery_days",
-              "fieldValue": "={{$json.delivery_days}}"
-            },
-            {
-              "fieldName": "skills_recommended",
-              "fieldValue": "={{$json.skills_recommended}}"
-            },
-            {
-              "fieldName": "portfolio_items",
-              "fieldValue": "={{$json.portfolio_items}}"
-            },
-            {
-              "fieldName": "internal_notes",
-              "fieldValue": "={{$json.internal_notes}}"
+              "name": "Prefer",
+              "value": "return=representation"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $json.project_id, proposal_text: $json.proposal_text, questions_text: $json.questions_text, budget_suggested: $json.budget_suggested, delivery_days: $json.delivery_days, skills_recommended: $json.skills_recommended, portfolio_items: $json.portfolio_items, internal_notes: $json.internal_notes }) }}"
       },
       "id": "save-proposal",
       "name": "Guardar Propuesta",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         2970,
         0
-      ],
-      "credentials": {
-        "supabaseApi": {
-          "id": "",
-          "name": "Supabase crm-vortek"
-        }
-      }
+      ]
     },
     {
       "parameters": {
@@ -444,38 +380,41 @@
     },
     {
       "parameters": {
-        "operation": "update",
-        "tableId": "workana_projects",
-        "matchingColumns": [
-          "id"
-        ],
-        "fieldsUi": {
-          "fieldValues": [
+        "method": "PATCH",
+        "url": "={{$('CONFIG').item.json.SUPABASE_URL}}/rest/v1/workana_projects?id=eq.{{$json.id}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "fieldName": "status",
-              "fieldValue": "={{$json.success ? 'sent' : 'proposal_generated'}}"
+              "name": "apikey",
+              "value": "={{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "auto_sent",
-              "fieldValue": "={{$json.auto_sent}}"
+              "name": "Authorization",
+              "value": "=Bearer {{$('CONFIG').item.json.SUPABASE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: $json.success ? \"sent\" : \"proposal_generated\", auto_sent: $json.auto_sent }) }}"
       },
       "id": "update-status-auto",
       "name": "Actualizar Estado",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         3850,
         -150
-      ],
-      "credentials": {
-        "supabaseApi": {
-          "id": "",
-          "name": "Supabase crm-vortek"
-        }
-      }
+      ]
     },
     {
       "parameters": {
@@ -539,43 +478,41 @@
     },
     {
       "parameters": {
-        "operation": "create",
-        "tableId": "workana_logs",
-        "fieldsUi": {
-          "fieldValues": [
+        "method": "POST",
+        "url": "={{$('CONFIG').item.json.SUPABASE_URL}}/rest/v1/workana_logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
             {
-              "fieldName": "action",
-              "fieldValue": "proposal_processed"
+              "name": "apikey",
+              "value": "={{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "success",
-              "fieldValue": true
+              "name": "Authorization",
+              "value": "=Bearer {{$('CONFIG').item.json.SUPABASE_KEY}}"
             },
             {
-              "fieldName": "details",
-              "fieldValue": "={{ { project_title: $json.project_title || 'Sin título', auto_sent: $json.auto_sent || false } }}"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
-        }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ action: \"proposal_processed\", success: true, details: { project_title: $json.project_title || \"Sin título\", auto_sent: $json.auto_sent || false } }) }}"
       },
       "id": "log-action",
       "name": "Log Acción",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         4510,
         0
-      ],
-      "credentials": {
-        "supabaseApi": {
-          "id": "",
-          "name": "Supabase crm-vortek"
-        }
-      }
+      ]
     },
     {
       "parameters": {
-        "content": "## 🤖 WORKANA AUTOPILOT v2\n\n### Flujo:\n1. Cada 30 min scrape a Workana\n2. Filtra proyectos nuevos (Supabase nativo)\n3. IA genera propuesta (OpenAI gpt-4o)\n4. Guarda en Supabase (nodos nativos)\n5. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n6. Siempre notifica por WhatsApp\n\n### Credenciales necesarias:\n- **Supabase API** → crm-vortek\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API\n\n### Config:\n- **AUTO_MODE**: false por defecto (manual)\n- Cambiar a true para piloto automático\n- Ajustar MIN_RELEVANCE_AUTO (default 80)",
+        "content": "## 🤖 WORKANA AUTOPILOT v2\n\n### Flujo:\n1. Cada 30 min scrape a Workana\n2. Filtra proyectos nuevos (batch query)\n3. IA genera propuesta (OpenAI gpt-4o)\n4. Guarda en Supabase (HTTP REST)\n5. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n6. Siempre notifica por WhatsApp\n\n### Credenciales necesarias (solo 2):\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API (apikey)\n\n### Config:\n- Todo se configura en el nodo CONFIG (Code)\n- **AUTO_MODE**: false por defecto (manual)\n- Supabase usa HTTP directo (sin credencial n8n)",
         "width": 380,
         "height": 460
       },
