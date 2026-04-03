@@ -1,5 +1,5 @@
 {
-  "name": "Workana Autopilot",
+  "name": "Workana Autopilot v2",
   "nodes": [
     {
       "parameters": {
@@ -22,13 +22,10 @@
       "parameters": {
         "values": {
           "string": [
-            { "name": "PUPPETEER_URL", "value": "http://localhost:3500" },
-            { "name": "SUPABASE_URL", "value": "https://zcmqcosuvjndgcwylzna.supabase.co" },
-            { "name": "SUPABASE_KEY", "value": "={{$env.SUPABASE_ANON_KEY}}" },
+            { "name": "PUPPETEER_URL", "value": "https://workana-auto-pilot.ioefpm.easypanel.host" },
             { "name": "EVOLUTION_URL", "value": "https://evo.vortekai.es" },
             { "name": "EVOLUTION_INSTANCE", "value": "WorkanaBot" },
             { "name": "WHATSAPP_NUMBER", "value": "34XXXXXXXXX" },
-            { "name": "OPENAI_MODEL", "value": "gpt-4o" },
             { "name": "SEARCH_CATEGORIES", "value": "it-programming" },
             { "name": "SEARCH_PAGES", "value": "2" },
             { "name": "MIN_RELEVANCE_AUTO", "value": "80" },
@@ -46,7 +43,7 @@
       "typeVersion": 3.4,
       "position": [220, 0],
       "notesInFlow": true,
-      "notes": "CONFIGURACIÓN CENTRAL\nCambia AUTO_MODE a true para envío automático"
+      "notes": "CONFIGURACIÓN CENTRAL\nCredenciales de Supabase y OpenAI se configuran en los nodos nativos.\nCambia AUTO_MODE a true para envío automático."
     },
     {
       "parameters": {
@@ -70,7 +67,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"categories\": [\"it-programming\"],\n  \"pages\": {{$('CONFIG').item.json.SEARCH_PAGES}},\n  \"language\": \"es\"\n}"
+        "jsonBody": "={\n  \"categories\": [\"{{$('CONFIG').item.json.SEARCH_CATEGORIES}}\"],\n  \"pages\": {{$('CONFIG').item.json.SEARCH_PAGES}},\n  \"language\": \"es\"\n}"
       },
       "id": "scrape-projects",
       "name": "Scrape Workana",
@@ -83,7 +80,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extraer proyectos del resultado del scraping\nconst data = $input.first().json;\n\nif (!data.success || !data.projects || data.projects.length === 0) {\n  console.log('No se encontraron proyectos o error en scraping');\n  return [];\n}\n\n// Devolver cada proyecto como item individual\nreturn data.projects.map(project => ({\n  json: {\n    ...project,\n    config: {\n      SUPABASE_URL: $('CONFIG').item.json.SUPABASE_URL,\n      SUPABASE_KEY: $('CONFIG').item.json.SUPABASE_KEY,\n      PUPPETEER_URL: $('CONFIG').item.json.PUPPETEER_URL,\n      EVOLUTION_URL: $('CONFIG').item.json.EVOLUTION_URL,\n      EVOLUTION_INSTANCE: $('CONFIG').item.json.EVOLUTION_INSTANCE,\n      WHATSAPP_NUMBER: $('CONFIG').item.json.WHATSAPP_NUMBER,\n      OPENAI_MODEL: $('CONFIG').item.json.OPENAI_MODEL,\n      AUTO_MODE: $('CONFIG').item.json.AUTO_MODE,\n      MIN_RELEVANCE_AUTO: parseInt($('CONFIG').item.json.MIN_RELEVANCE_AUTO),\n      MAX_PROPOSALS_ON_PROJECT: parseInt($('CONFIG').item.json.MAX_PROPOSALS_ON_PROJECT),\n    }\n  }\n}));"
+        "jsCode": "// Extraer proyectos del resultado del scraping\nconst data = $input.first().json;\n\nif (!data.success || !data.projects || data.projects.length === 0) {\n  console.log('No se encontraron proyectos o error en scraping');\n  return [];\n}\n\n// Devolver cada proyecto como item individual con config simplificada\nreturn data.projects.map(project => ({\n  json: {\n    ...project,\n    config: {\n      PUPPETEER_URL: $('CONFIG').item.json.PUPPETEER_URL,\n      EVOLUTION_URL: $('CONFIG').item.json.EVOLUTION_URL,\n      EVOLUTION_INSTANCE: $('CONFIG').item.json.EVOLUTION_INSTANCE,\n      WHATSAPP_NUMBER: $('CONFIG').item.json.WHATSAPP_NUMBER,\n      AUTO_MODE: $('CONFIG').item.json.AUTO_MODE,\n      MIN_RELEVANCE_AUTO: parseInt($('CONFIG').item.json.MIN_RELEVANCE_AUTO),\n      MAX_PROPOSALS_ON_PROJECT: parseInt($('CONFIG').item.json.MAX_PROPOSALS_ON_PROJECT),\n    }\n  }\n}));"
       },
       "id": "parse-projects",
       "name": "Parsear Proyectos",
@@ -93,32 +90,29 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_projects",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" }
-          ]
-        },
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            { "name": "select", "value": "workana_url" },
-            { "name": "workana_url", "value": "=eq.{{$json.url}}" }
-          ]
-        }
+        "operation": "getAll",
+        "tableId": "workana_projects",
+        "returnAll": false,
+        "limit": 1,
+        "filterType": "string",
+        "filterString": "=workana_url=eq.{{$json.url}}"
       },
       "id": "check-existing",
       "name": "Ya existe en DB?",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1100, 0]
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1100, 0],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase crm-vortek"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Si el proyecto ya existe en Supabase, lo saltamos\nconst existingCheck = $input.first().json;\nconst projectData = $('Parsear Proyectos').item.json;\n\n// Si la respuesta es un array con datos, ya existe\nif (Array.isArray(existingCheck) && existingCheck.length > 0) {\n  console.log(`Proyecto ya existe: ${projectData.title}`);\n  return [];\n}\n\n// Proyecto nuevo - continuar\nreturn [{ json: projectData }];"
+        "jsCode": "// Si el proyecto ya existe en Supabase, lo saltamos\nconst result = $input.first().json;\nconst projectData = $('Parsear Proyectos').item.json;\n\n// Si la respuesta del nodo Supabase tiene workana_url, ya existe\nif (result && result.workana_url) {\n  console.log(`Proyecto ya existe: ${projectData.title}`);\n  return [];\n}\n\n// Proyecto nuevo - continuar\nreturn [{ json: projectData }];"
       },
       "id": "filter-new",
       "name": "Filtrar Nuevos",
@@ -148,7 +142,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Combinar datos del scraping con los detalles completos\nconst basic = $('Filtrar Nuevos').item.json;\nconst detailsResponse = $input.first().json;\n\nif (!detailsResponse.success) {\n  console.log(`Error obteniendo detalles: ${detailsResponse.error}`);\n  // Continuar con datos básicos\n  return [{ json: { ...basic, details_error: true } }];\n}\n\nconst details = detailsResponse.details;\n\n// Extraer número de propuestas (intentar parsear el texto)\nconst proposalsText = details.proposals || basic.proposals_text || '';\nconst proposalsMatch = proposalsText.match(/(\\d+)/);\nconst proposalsCount = proposalsMatch ? parseInt(proposalsMatch[1]) : 0;\n\n// Filtrar por número de propuestas\nconst maxProposals = basic.config.MAX_PROPOSALS_ON_PROJECT || 30;\nif (proposalsCount > maxProposals) {\n  console.log(`Demasiadas propuestas (${proposalsCount}): ${basic.title}`);\n  return [];\n}\n\nreturn [{\n  json: {\n    ...basic,\n    full_description: details.description || basic.description,\n    full_title: details.title || basic.title,\n    budget_detail: details.budget || basic.budget_text,\n    category: details.category || basic.category || '',\n    deadline: details.deadline || '',\n    skills_detail: details.skills && details.skills.length > 0 ? details.skills : basic.skills,\n    proposals_count: proposalsCount,\n    client_name: details.client?.name || '',\n    client_country: details.client?.country || '',\n    client_rating: details.client?.rating || '',\n    client_verified: details.client?.verified || false,\n    publish_date: details.publish_date || basic.date_text || '',\n    full_text: details.full_text || '',\n  }\n}];"
+        "jsCode": "// Combinar datos del scraping con los detalles completos\nconst basic = $('Filtrar Nuevos').item.json;\nconst detailsResponse = $input.first().json;\n\nif (!detailsResponse.success) {\n  console.log(`Error obteniendo detalles: ${detailsResponse.error}`);\n  return [{ json: { ...basic, details_error: true } }];\n}\n\nconst details = detailsResponse.details;\n\n// Extraer número de propuestas\nconst proposalsText = details.proposals || basic.proposals_text || '';\nconst proposalsMatch = proposalsText.match(/(\\d+)/);\nconst proposalsCount = proposalsMatch ? parseInt(proposalsMatch[1]) : 0;\n\n// Filtrar por número de propuestas\nconst maxProposals = basic.config.MAX_PROPOSALS_ON_PROJECT || 30;\nif (proposalsCount > maxProposals) {\n  console.log(`Demasiadas propuestas (${proposalsCount}): ${basic.title}`);\n  return [];\n}\n\nreturn [{\n  json: {\n    ...basic,\n    full_description: details.description || basic.description,\n    full_title: details.title || basic.title,\n    budget_detail: details.budget || basic.budget_text,\n    category: details.category || basic.category || '',\n    deadline: details.deadline || '',\n    skills_detail: details.skills && details.skills.length > 0 ? details.skills : basic.skills,\n    proposals_count: proposalsCount,\n    client_name: details.client?.name || '',\n    client_country: details.client?.country || '',\n    client_rating: details.client?.rating || '',\n    client_verified: details.client?.verified || false,\n    publish_date: details.publish_date || basic.date_text || '',\n    full_text: details.full_text || '',\n  }\n}];"
       },
       "id": "merge-data",
       "name": "Combinar Datos",
@@ -170,7 +164,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"{{$('CONFIG').item.json.OPENAI_MODEL}}\",\n  \"temperature\": 0.4,\n  \"max_tokens\": 2000,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\\n{\\n  \\\"relevance_score\\\": 0-100,\\n  \\\"red_flags\\\": [\\\"flag1\\\", \\\"flag2\\\"],\\n  \\\"should_apply\\\": true/false,\\n  \\\"proposal_text\\\": \\\"texto de la propuesta listo para copiar\\\",\\n  \\\"questions_text\\\": \\\"preguntas para el cliente (1-2 máximo)\\\",\\n  \\\"budget_suggested\\\": número en EUR,\\n  \\\"delivery_days\\\": número,\\n  \\\"skills_recommended\\\": [\\\"skill1\\\", \\\"skill2\\\"],\\n  \\\"portfolio_items\\\": [\\\"item1\\\", \\\"item2\\\"],\\n  \\\"internal_notes\\\": {\\n    \\\"perfil_detectado\\\": \\\"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\\\",\\n    \\\"dolor_real\\\": \\\"descripción\\\",\\n    \\\"por_que_yo\\\": \\\"razón específica\\\",\\n    \\\"tiempo_estimado\\\": \\\"rango\\\",\\n    \\\"razonamiento_precio\\\": \\\"cómo llegaste al precio\\\"\\n  }\\n}\\n\\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\\n\\n# INSTRUCCIONES DE GENERACIÓN\\n\\n## OBJETIVO\\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\\n\\n## PASO 0: FILTRO DE VIABILIDAD\\nAnaliza si el proyecto merece propuesta. Red flags:\\n- Presupuesto < €150 para proyectos de desarrollo/IA\\n- Descripción < 3 líneas sin posibilidad de inferir alcance\\n- Cliente nuevo + presupuesto bajo + sin verificar pago\\n- Frases como 'necesito algo sencillo', 'es rápido' sin presupuesto real\\n- Proyecto fuera del stack (n8n, IA, chatbots, automatización, software, web)\\n- Más de 30 propuestas enviadas\\n\\nSi hay 2+ red flags, pon should_apply: false y explica en red_flags.\\n\\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\\n- Tono: FORMAL / CASUAL / URGENTE\\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\\n\\n## PASO 2: DOLOR REAL\\nIdentifica el problema de negocio DETRÁS de lo técnico.\\n\\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\\n\\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\\n→ TÉCNICO/NEGOCIO: Restatea su problema con observación experta\\n→ NOVATO/URGENTE: Hazles sentir que ya tienes la solución\\n\\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\\n\\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\\n\\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\\n\\n## PASO 4: PREGUNTAS (1-2 máximo)\\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\\n\\n## PRESUPUESTO\\nTarifa mínima: €40/h. Factor valor: 1.2-2.0. Sumar margen Workana 20%.\\nRangos: Chatbot básico €350-700, con IA €700-1600, automatización n8n €500-1400, agente IA complejo €1400-3500, software/SaaS €2000-5500.\\nNO menciones precio en la propuesta (se negocia en llamada).\\n\\n## ANTI-PATRONES\\n❌ Empezar con 'Hola, soy Alex y tengo X años...'\\n❌ Primera frase genérica\\n❌ Prometer plazos sin saber alcance\\n❌ Listar tecnologías sin beneficio\\n❌ 'podría', 'creo que', 'quizás'\\n❌ 'Quedo a tu disposición'\\n❌ Más de 200 palabras\\n❌ Más de 2 preguntas\\n❌ Mencionar precio\\n\\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\\n- Sistema Integral de Logística y Envíos para E-commerce\\n- Asistente Virtual Inteligente Multicanal 24/7\\n- Automatización de Marketing de Contenidos\\n- Chatbot Inteligente en WhatsApp con IA para Automatización\\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\\n\\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\\n\\n---\\n\\nPROYECTO A ANALIZAR:\\n\\nTítulo: {{$json.full_title || $json.title}}\\nURL: {{$json.url}}\\nDescripción: {{$json.full_description || $json.description}}\\nPresupuesto: {{$json.budget_detail || $json.budget_text || 'No especificado'}}\\nSkills: {{($json.skills_detail || $json.skills || []).join(', ')}}\\nPropuestas actuales: {{$json.proposals_count || 'Desconocido'}}\\nCliente: {{$json.client_name || 'Desconocido'}} ({{$json.client_country || '?'}})\\nRating: {{$json.client_rating || 'Sin rating'}}\\nVerificado: {{$json.client_verified ? 'Sí' : 'No'}}\\nFecha publicación: {{$json.publish_date || 'Desconocido'}}\\nCategoría: {{$json.category || 'IT & Programación'}}\\n\\nTexto completo de la página:\\n{{($json.full_text || '').substring(0, 3000)}}\"\n    }\n  ]\n}"
+        "jsonBody": "={\n  \"model\": \"gpt-4o\",\n  \"temperature\": 0.4,\n  \"max_tokens\": 2000,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\\n{\\n  \\\"relevance_score\\\": 0-100,\\n  \\\"red_flags\\\": [\\\"flag1\\\", \\\"flag2\\\"],\\n  \\\"should_apply\\\": true/false,\\n  \\\"proposal_text\\\": \\\"texto de la propuesta listo para copiar\\\",\\n  \\\"questions_text\\\": \\\"preguntas para el cliente (1-2 máximo)\\\",\\n  \\\"budget_suggested\\\": número en EUR,\\n  \\\"delivery_days\\\": número,\\n  \\\"skills_recommended\\\": [\\\"skill1\\\", \\\"skill2\\\"],\\n  \\\"portfolio_items\\\": [\\\"item1\\\", \\\"item2\\\"],\\n  \\\"internal_notes\\\": {\\n    \\\"perfil_detectado\\\": \\\"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\\\",\\n    \\\"dolor_real\\\": \\\"descripción\\\",\\n    \\\"por_que_yo\\\": \\\"razón específica\\\",\\n    \\\"tiempo_estimado\\\": \\\"rango\\\",\\n    \\\"razonamiento_precio\\\": \\\"cómo llegaste al precio\\\"\\n  }\\n}\\n\\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\\n\\n# INSTRUCCIONES DE GENERACIÓN\\n\\n## OBJETIVO\\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\\n\\n## PASO 0: FILTRO DE VIABILIDAD\\nAnaliza si el proyecto merece propuesta. Red flags:\\n- Presupuesto < €150 para proyectos de desarrollo/IA\\n- Descripción < 3 líneas sin posibilidad de inferir alcance\\n- Cliente nuevo + presupuesto bajo + sin verificar pago\\n- Frases como 'necesito algo sencillo', 'es rápido' sin presupuesto real\\n- Proyecto fuera del stack (n8n, IA, chatbots, automatización, software, web)\\n- Más de 30 propuestas enviadas\\n\\nSi hay 2+ red flags, pon should_apply: false y explica en red_flags.\\n\\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\\n- Tono: FORMAL / CASUAL / URGENTE\\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\\n\\n## PASO 2: DOLOR REAL\\nIdentifica el problema de negocio DETRÁS de lo técnico.\\n\\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\\n\\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\\n→ TÉCNICO/NEGOCIO: Restatea su problema con observación experta\\n→ NOVATO/URGENTE: Hazles sentir que ya tienes la solución\\n\\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\\n\\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\\n\\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\\n\\n## PASO 4: PREGUNTAS (1-2 máximo)\\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\\n\\n## PRESUPUESTO\\nTarifa mínima: €40/h. Factor valor: 1.2-2.0. Sumar margen Workana 20%.\\nRangos: Chatbot básico €350-700, con IA €700-1600, automatización n8n €500-1400, agente IA complejo €1400-3500, software/SaaS €2000-5500.\\nNO menciones precio en la propuesta (se negocia en llamada).\\n\\n## ANTI-PATRONES\\n❌ Empezar con 'Hola, soy Alex y tengo X años...'\\n❌ Primera frase genérica\\n❌ Prometer plazos sin saber alcance\\n❌ Listar tecnologías sin beneficio\\n❌ 'podría', 'creo que', 'quizás'\\n❌ 'Quedo a tu disposición'\\n❌ Más de 200 palabras\\n❌ Más de 2 preguntas\\n❌ Mencionar precio\\n\\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\\n- Sistema Integral de Logística y Envíos para E-commerce\\n- Asistente Virtual Inteligente Multicanal 24/7\\n- Automatización de Marketing de Contenidos\\n- Chatbot Inteligente en WhatsApp con IA para Automatización\\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\\n\\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\\n\\n---\\n\\nPROYECTO A ANALIZAR:\\n\\nTítulo: {{$json.full_title || $json.title}}\\nURL: {{$json.url}}\\nDescripción: {{$json.full_description || $json.description}}\\nPresupuesto: {{$json.budget_detail || $json.budget_text || 'No especificado'}}\\nSkills: {{($json.skills_detail || $json.skills || []).join(', ')}}\\nPropuestas actuales: {{$json.proposals_count || 'Desconocido'}}\\nCliente: {{$json.client_name || 'Desconocido'}} ({{$json.client_country || '?'}})\\nRating: {{$json.client_rating || 'Sin rating'}}\\nVerificado: {{$json.client_verified ? 'Sí' : 'No'}}\\nFecha publicación: {{$json.publish_date || 'Desconocido'}}\\nCategoría: {{$json.category || 'IT & Programación'}}\\n\\nTexto completo de la página:\\n{{($json.full_text || '').substring(0, 3000)}}\"\n    }\n  ]\n}"
       },
       "id": "generate-proposal",
       "name": "IA Genera Propuesta",
@@ -179,7 +173,13 @@
       "position": [1980, 0],
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 3000
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "OpenAI"
+        }
+      }
     },
     {
       "parameters": {
@@ -193,30 +193,43 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_projects",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" },
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "Prefer", "value": "resolution=merge-duplicates,return=representation" }
+        "operation": "create",
+        "tableId": "workana_projects",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldName": "workana_url", "fieldValue": "={{$json.project.workana_url}}" },
+            { "fieldName": "title", "fieldValue": "={{$json.project.title}}" },
+            { "fieldName": "description", "fieldValue": "={{$json.project.description}}" },
+            { "fieldName": "category", "fieldValue": "={{$json.project.category}}" },
+            { "fieldName": "budget_text", "fieldValue": "={{$json.project.budget_text}}" },
+            { "fieldName": "skills", "fieldValue": "={{$json.project.skills}}" },
+            { "fieldName": "client_name", "fieldValue": "={{$json.project.client_name}}" },
+            { "fieldName": "client_country", "fieldValue": "={{$json.project.client_country}}" },
+            { "fieldName": "client_rating", "fieldValue": "={{$json.project.client_rating}}" },
+            { "fieldName": "client_verified", "fieldValue": "={{$json.project.client_verified}}" },
+            { "fieldName": "proposals_count", "fieldValue": "={{$json.project.proposals_count}}" },
+            { "fieldName": "publication_date", "fieldValue": "={{$json.project.publication_date}}" },
+            { "fieldName": "relevance_score", "fieldValue": "={{$json.project.relevance_score}}" },
+            { "fieldName": "red_flags", "fieldValue": "={{$json.project.red_flags}}" },
+            { "fieldName": "status", "fieldValue": "={{$json.project.status}}" }
           ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{JSON.stringify($json.project)}}"
+        }
       },
       "id": "save-project",
       "name": "Guardar Proyecto",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [2420, 0]
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2420, 0],
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase crm-vortek"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Obtener el ID del proyecto guardado para asociar la propuesta\nconst savedProject = $input.first().json;\nconst structuredData = $('Estructurar Datos').item.json;\n\nconst projectId = Array.isArray(savedProject) \n  ? savedProject[0]?.id \n  : savedProject?.id;\n\nif (!projectId) {\n  console.error('No se obtuvo ID del proyecto guardado');\n  return [];\n}\n\nreturn [{\n  json: {\n    project_id: projectId,\n    ...structuredData.proposal,\n    project: structuredData.project,\n    config: structuredData.config,\n  }\n}];"
+        "jsCode": "// Obtener el ID del proyecto guardado para asociar la propuesta\nconst savedProject = $input.first().json;\nconst structuredData = $('Estructurar Datos').item.json;\n\nconst projectId = Array.isArray(savedProject)\n  ? savedProject[0]?.id\n  : savedProject?.id;\n\nif (!projectId) {\n  console.error('No se obtuvo ID del proyecto guardado');\n  return [];\n}\n\nreturn [{\n  json: {\n    project_id: projectId,\n    ...structuredData.proposal,\n    project: structuredData.project,\n    config: structuredData.config,\n  }\n}];"
       },
       "id": "prepare-proposal",
       "name": "Preparar Propuesta",
@@ -226,26 +239,32 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_proposals",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" },
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "Prefer", "value": "return=representation" }
+        "operation": "create",
+        "tableId": "workana_proposals",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldName": "project_id", "fieldValue": "={{$json.project_id}}" },
+            { "fieldName": "proposal_text", "fieldValue": "={{$json.proposal_text}}" },
+            { "fieldName": "questions_text", "fieldValue": "={{$json.questions_text}}" },
+            { "fieldName": "budget_suggested", "fieldValue": "={{$json.budget_suggested}}" },
+            { "fieldName": "delivery_days", "fieldValue": "={{$json.delivery_days}}" },
+            { "fieldName": "skills_recommended", "fieldValue": "={{$json.skills_recommended}}" },
+            { "fieldName": "portfolio_items", "fieldValue": "={{$json.portfolio_items}}" },
+            { "fieldName": "internal_notes", "fieldValue": "={{$json.internal_notes}}" }
           ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"project_id\": \"{{$json.project_id}}\",\n  \"proposal_text\": {{JSON.stringify($json.proposal_text)}},\n  \"questions_text\": {{JSON.stringify($json.questions_text || '')}},\n  \"budget_suggested\": {{$json.budget_suggested || 'null'}},\n  \"delivery_days\": {{$json.delivery_days || 'null'}},\n  \"skills_recommended\": {{JSON.stringify($json.skills_recommended || [])}},\n  \"portfolio_items\": {{JSON.stringify($json.portfolio_items || [])}},\n  \"internal_notes\": {{JSON.stringify($json.internal_notes || {})}}\n}"
+        }
       },
       "id": "save-proposal",
       "name": "Guardar Propuesta",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [2860, 0]
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2860, 0],
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase crm-vortek"
+        }
+      }
     },
     {
       "parameters": {
@@ -299,7 +318,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Actualizar estado en Supabase después del envío automático\nconst submitResult = $input.first().json;\nconst proposalData = $('Preparar Propuesta').item.json;\n\nconst success = submitResult.success === true;\n\nreturn [{\n  json: {\n    success,\n    project_url: proposalData.project.workana_url,\n    project_title: proposalData.project.title,\n    proposal_text: proposalData.proposal_text,\n    budget: proposalData.budget_suggested,\n    relevance: proposalData.project.relevance_score,\n    message: submitResult.message || (success ? 'Enviado' : 'Error'),\n    auto_sent: true,\n    config: proposalData.config,\n    project_id: proposalData.project_id,\n  }\n}];"
+        "jsCode": "// Actualizar estado después del envío automático\nconst submitResult = $input.first().json;\nconst proposalData = $('Preparar Propuesta').item.json;\n\nconst success = submitResult.success === true;\n\nreturn [{\n  json: {\n    id: proposalData.project_id,\n    success,\n    project_url: proposalData.project.workana_url,\n    project_title: proposalData.project.title,\n    proposal_text: proposalData.proposal_text,\n    budget: proposalData.budget_suggested,\n    relevance: proposalData.project.relevance_score,\n    message: submitResult.message || (success ? 'Enviado' : 'Error'),\n    auto_sent: true,\n    config: proposalData.config,\n    project_id: proposalData.project_id,\n  }\n}];"
       },
       "id": "process-auto-result",
       "name": "Resultado Auto",
@@ -309,35 +328,41 @@
     },
     {
       "parameters": {
-        "method": "PATCH",
-        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_projects",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" },
-            { "name": "Content-Type", "value": "application/json" }
+        "operation": "update",
+        "tableId": "workana_projects",
+        "matchingColumns": ["id"],
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldName": "status", "fieldValue": "={{$json.success ? 'sent' : 'proposal_generated'}}" },
+            { "fieldName": "auto_sent", "fieldValue": "={{$json.auto_sent}}" }
           ]
-        },
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            { "name": "id", "value": "=eq.{{$json.project_id}}" }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"status\": \"{{$json.success ? 'sent' : 'proposal_generated'}}\",\n  \"auto_sent\": {{$json.auto_sent}}\n}"
+        }
       },
       "id": "update-status-auto",
       "name": "Actualizar Estado",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [3740, -150]
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [3740, -150],
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase crm-vortek"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Preparar mensaje de notificación WhatsApp\nconst data = $('Preparar Propuesta').item.json;\nconst project = data.project;\nconst isAuto = $input.first()?.json?.auto_sent || false;\nconst autoSuccess = $input.first()?.json?.success;\n\nlet statusEmoji, statusText;\nif (isAuto && autoSuccess) {\n  statusEmoji = '🤖✅';\n  statusText = 'ENVIADO AUTOMÁTICAMENTE';\n} else if (isAuto && !autoSuccess) {\n  statusEmoji = '🤖❌';\n  statusText = 'ERROR EN ENVÍO AUTO - Revisa manualmente';\n} else {\n  statusEmoji = '📋';\n  statusText = 'PENDIENTE DE ENVÍO';\n}\n\nconst relevanceBar = '█'.repeat(Math.floor(project.relevance_score / 10)) + '░'.repeat(10 - Math.floor(project.relevance_score / 10));\n\nconst msg = `${statusEmoji} *${statusText}*\n\n🎯 *${project.title}*\nRelevancia: ${relevanceBar} ${project.relevance_score}/100\n\n💰 Presupuesto: ${project.budget_text || 'No especificado'}\n📊 Propuestas: ${project.proposals_count}\n🌍 Cliente: ${project.client_name || '?'} (${project.client_country || '?'})\n⭐ Rating: ${project.client_rating || 'Sin rating'}\n✅ Verificado: ${project.client_verified ? 'Sí' : 'No'}\n🏷️ Skills: ${(project.skills || []).join(', ')}\n\n---\n\n📝 *PROPUESTA:*\n${data.proposal_text}\n\n❓ *PREGUNTAS:*\n${data.questions_text || 'Ninguna'}\n\n💶 *Precio sugerido:* €${data.budget_suggested || '?'}\n📅 *Plazo:* ${data.delivery_days || '?'} días\n\n---\n\n📌 *Ficha interna:*\nPerfil: ${data.internal_notes?.perfil_detectado || '?'}\nDolor: ${data.internal_notes?.dolor_real || '?'}\nPor qué yo: ${data.internal_notes?.por_que_yo || '?'}\n\n🔗 ${project.workana_url}`;\n\nreturn [{\n  json: {\n    message: msg,\n    number: data.config.WHATSAPP_NUMBER,\n    evolution_url: data.config.EVOLUTION_URL,\n    evolution_instance: data.config.EVOLUTION_INSTANCE,\n  }\n}];"
+        "jsCode": "// Preparar notificación para modo manual (sin auto-submit)\nconst data = $('Preparar Propuesta').item.json;\nconst project = data.project;\n\nreturn [{\n  json: {\n    auto_sent: false,\n    success: false,\n    project_url: project.workana_url,\n    project_title: project.title,\n    proposal_text: data.proposal_text,\n    budget: data.budget_suggested,\n    relevance: project.relevance_score,\n    message: 'Pendiente de envío manual',\n    config: data.config,\n    project_id: data.project_id,\n  }\n}];"
+      },
+      "id": "manual-path",
+      "name": "Ruta Manual",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3300, 150]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Preparar mensaje de notificación WhatsApp\nconst data = $('Preparar Propuesta').item.json;\nconst project = data.project;\nconst isAuto = $input.first()?.json?.auto_sent || false;\nconst autoSuccess = $input.first()?.json?.success;\n\nlet statusEmoji, statusText;\nif (isAuto && autoSuccess) {\n  statusEmoji = '🤖✅';\n  statusText = 'ENVIADO AUTOMÁTICAMENTE';\n} else if (isAuto && !autoSuccess) {\n  statusEmoji = '🤖❌';\n  statusText = 'ERROR EN ENVÍO AUTO - Revisa manualmente';\n} else {\n  statusEmoji = '📋';\n  statusText = 'PENDIENTE DE ENVÍO';\n}\n\nconst relevanceBar = '█'.repeat(Math.floor(project.relevance_score / 10)) + '░'.repeat(10 - Math.floor(project.relevance_score / 10));\n\nconst msg = `${statusEmoji} *${statusText}*\n\n🎯 *${project.title}*\nRelevancia: ${relevanceBar} ${project.relevance_score}/100\n\n💰 Presupuesto: ${project.budget_text || 'No especificado'}\n📊 Propuestas: ${project.proposals_count}\n🌍 Cliente: ${project.client_name || '?'} (${project.client_country || '?'})\n⭐ Rating: ${project.client_rating || 'Sin rating'}\n✅ Verificado: ${project.client_verified ? 'Sí' : 'No'}\n🏷️ Skills: ${(project.skills || []).join(', ')}\n\n---\n\n📝 *PROPUESTA:*\n${data.proposal_text}\n\n❓ *PREGUNTAS:*\n${data.questions_text || 'Ninguna'}\n\n💶 *Precio sugerido:* €${data.budget_suggested || '?'}\n📅 *Plazo:* ${data.delivery_days || '?'} días\n\n---\n\n📌 *Ficha interna:*\nPerfil: ${data.internal_notes?.perfil_detectado || '?'}\nDolor: ${data.internal_notes?.dolor_real || '?'}\nPor qué yo: ${data.internal_notes?.por_que_yo || '?'}\n\n🔗 ${project.workana_url}`;\n\nreturn [{\n  json: {\n    message: msg,\n    number: data.config.WHATSAPP_NUMBER,\n    evolution_url: data.config.EVOLUTION_URL,\n    evolution_instance: data.config.EVOLUTION_INSTANCE,\n    auto_sent: isAuto,\n    project_title: project.title,\n  }\n}];"
       },
       "id": "format-whatsapp",
       "name": "Formatear WhatsApp",
@@ -365,45 +390,43 @@
       "name": "Enviar WhatsApp",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [4180, 0]
+      "position": [4180, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Evolution API"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Preparar notificación para modo manual (sin auto-submit)\nconst data = $('Preparar Propuesta').item.json;\nconst project = data.project;\n\nreturn [{\n  json: {\n    auto_sent: false,\n    success: false,\n    project_url: project.workana_url,\n    project_title: project.title,\n    proposal_text: data.proposal_text,\n    budget: data.budget_suggested,\n    relevance: project.relevance_score,\n    message: 'Pendiente de envío manual',\n    config: data.config,\n    project_id: data.project_id,\n  }\n}];"
-      },
-      "id": "manual-path",
-      "name": "Ruta Manual",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [3300, 150]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_logs",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" },
-            { "name": "Content-Type", "value": "application/json" }
+        "operation": "create",
+        "tableId": "workana_logs",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldName": "action", "fieldValue": "proposal_processed" },
+            { "fieldName": "success", "fieldValue": true },
+            { "fieldName": "details", "fieldValue": "={{ { project_title: $json.project_title || 'Sin título', auto_sent: $json.auto_sent || false } }}" }
           ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"action\": \"proposal_processed\",\n  \"success\": true,\n  \"details\": {\n    \"project_title\": {{JSON.stringify($('Formatear WhatsApp').item.json.message.substring(0, 100))}},\n    \"auto_sent\": {{$('Formatear WhatsApp').item.json.auto_sent || false}}\n  }\n}"
+        }
       },
       "id": "log-action",
       "name": "Log Acción",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [4400, 0]
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [4400, 0],
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase crm-vortek"
+        }
+      }
     },
     {
       "parameters": {
-        "content": "## 🤖 WORKANA AUTOPILOT\n\n### Flujo:\n1. Cada 30 min scrape a Workana\n2. Filtra proyectos nuevos (no vistos)\n3. IA genera propuesta personalizada\n4. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n5. Siempre notifica por WhatsApp\n\n### Config:\n- **AUTO_MODE**: false por defecto (manual)\n- Cambiar a true para piloto automático\n- Ajustar MIN_RELEVANCE_AUTO (default 80)\n\n### Requiere:\n- Puppeteer service corriendo en PUPPETEER_URL\n- Credenciales OpenAI configuradas\n- Evolution API para WhatsApp",
+        "content": "## 🤖 WORKANA AUTOPILOT v2\n\n### Flujo:\n1. Cada 30 min scrape a Workana\n2. Filtra proyectos nuevos (Supabase nativo)\n3. IA genera propuesta (OpenAI gpt-4o)\n4. Guarda en Supabase (nodos nativos)\n5. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n6. Siempre notifica por WhatsApp\n\n### Credenciales necesarias:\n- **Supabase API** → crm-vortek\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API\n\n### Config:\n- **AUTO_MODE**: false por defecto (manual)\n- Cambiar a true para piloto automático\n- Ajustar MIN_RELEVANCE_AUTO (default 80)",
         "width": 380,
-        "height": 420
+        "height": 460
       },
       "id": "sticky-info",
       "name": "Info",

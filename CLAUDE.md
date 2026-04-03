@@ -7,7 +7,7 @@ Sistema de automatización para enviar propuestas en Workana. Scrappea proyectos
 ```
 n8n (cron 30min) → Puppeteer Service (:3500) → Workana.com
                  → OpenAI (gpt-4o) genera propuestas
-                 → Supabase (crm-vortek) persiste datos
+                 → Supabase (crm-vortek) persiste datos [nodos nativos]
                  → Evolution API → WhatsApp notificaciones
 ```
 
@@ -15,10 +15,10 @@ n8n (cron 30min) → Puppeteer Service (:3500) → Workana.com
 
 - **Puppeteer Service**: Node.js + Express + Puppeteer + Stealth Plugin
 - **Orquestación**: n8n workflow (cron cada 30 min)
-- **Base de datos**: Supabase (proyecto crm-vortek: `zcmqcosuvjndgcwylzna`)
+- **Base de datos**: Supabase nodos nativos n8n (proyecto crm-vortek: `zcmqcosuvjndgcwylzna`)
 - **IA**: OpenAI GPT-4o para generación de propuestas y scoring
 - **Notificaciones**: Evolution API (WhatsApp)
-- **Despliegue**: Docker (Dockerfile + docker-compose.yml)
+- **Despliegue**: Docker en Easypanel
 
 ## Estructura del Proyecto
 
@@ -30,9 +30,9 @@ workana-autopilot/
 ├── Dockerfile                # Imagen Docker con Chromium
 ├── docker-compose.yml        # Orquestación Docker
 ├── .env.example              # Variables de entorno requeridas
-├── n8n-workflow.json         # Workflow completo de n8n
+├── n8n-workflow.json         # Workflow v2 con nodos nativos
 └── src/
-    ├── server.js             # API Express (7 endpoints, puerto 3500)
+    ├── server.js             # API Express (8 endpoints, puerto 3500)
     ├── browser.js            # BrowserManager: Puppeteer + stealth + login
     ├── scraper.js            # WorkanaScraper: scraping de búsquedas y detalles
     └── submitter.js          # ProposalSubmitter: envío automático de propuestas
@@ -50,6 +50,7 @@ workana-autopilot/
 | POST   | `/submit-proposal`  | Enviar una propuesta                 |
 | GET    | `/session-check`    | Verificar sesión activa              |
 | GET    | `/screenshot`       | Screenshot para debugging            |
+| GET    | `/debug-html`       | HTML de página para debugging        |
 
 ## Base de Datos (Supabase crm-vortek)
 
@@ -61,6 +62,27 @@ workana-autopilot/
 - **workana_logs** — Registro de todas las acciones
 
 RPCs: `get_new_workana_projects()`, `get_workana_daily_stats()`
+
+## n8n Workflow v2
+
+### Credenciales necesarias en n8n (3):
+1. **Supabase API** — URL + Service Role Key de crm-vortek
+2. **OpenAI API** — API key
+3. **HTTP Header Auth** — Para Evolution API (header: `apikey`)
+
+### Nodo CONFIG (variables restantes):
+- `PUPPETEER_URL` — URL del servicio en Easypanel
+- `EVOLUTION_URL`, `EVOLUTION_INSTANCE`, `WHATSAPP_NUMBER`
+- `SEARCH_CATEGORIES`, `SEARCH_PAGES`
+- `MIN_RELEVANCE_AUTO`, `MAX_PROPOSALS_DAY`, `MAX_PROPOSALS_ON_PROJECT`
+- `AUTO_MODE` — `false` = manual, `true` = autopiloto
+
+### Nodos del workflow:
+- **5 nodos Supabase nativos** — credencial centralizada
+- **1 nodo OpenAI** (HTTP + credencial openAiApi) — gpt-4o, JSON mode
+- **3 nodos Puppeteer** (HTTP Request) — scrape, detalles, submit
+- **1 nodo Evolution** (HTTP + credencial httpHeaderAuth) — WhatsApp
+- **9 nodos Code** — lógica de negocio
 
 ## Modos de Operación
 
@@ -75,7 +97,7 @@ RPCs: `get_new_workana_projects()`, `get_workana_daily_stats()`
 3. Notifica por WhatsApp confirmando envío
 4. Si relevancia < 80: notifica sin enviar (igual que modo manual)
 
-## Variables de Entorno Requeridas
+## Variables de Entorno del Contenedor Docker
 
 ```env
 WORKANA_EMAIL=tu-email@workana.com
@@ -85,12 +107,11 @@ HEADLESS=true
 USER_DATA_DIR=./chrome-data
 ```
 
-Variables adicionales configuradas en el nodo CONFIG de n8n:
-- `SUPABASE_URL`, `SUPABASE_KEY`
-- `EVOLUTION_URL`, `EVOLUTION_INSTANCE`, `WHATSAPP_NUMBER`
-- `OPENAI_MODEL` (gpt-4o)
-- `SEARCH_CATEGORIES`, `SEARCH_PAGES`
-- `MIN_RELEVANCE_AUTO`, `MAX_PROPOSALS_DAY`, `MAX_PROPOSALS_ON_PROJECT`
+## Despliegue
+
+Servicio en **Easypanel** con build desde GitHub (rama `main`).
+- URL: `https://workana-auto-pilot.ioefpm.easypanel.host`
+- Para redesplegar: push a main → Easypanel → Forzar reconstrucción
 
 ## Anti-Detección (9 medidas)
 
@@ -107,7 +128,7 @@ Variables adicionales configuradas en el nodo CONFIG de n8n:
 ## Notas de Desarrollo
 
 - Los selectores CSS del scraper usan múltiples fallbacks por si Workana cambia su HTML
-- Usar `/screenshot` para debugging visual cuando algo falla
+- Usar `/screenshot` o `/debug-html` para debugging cuando algo falla
 - La primera ejecución puede requerir ajustar selectores en `scraper.js` y `submitter.js`
 - El volumen `chrome-data` mantiene la sesión de Workana entre reinicios
 - Empezar siempre en modo manual para verificar calidad de propuestas
