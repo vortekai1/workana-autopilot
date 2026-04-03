@@ -16,7 +16,10 @@
       "name": "Cada 30 min",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 0]
+      "position": [
+        0,
+        0
+      ]
     },
     {
       "parameters": {
@@ -26,7 +29,10 @@
       "name": "CONFIG",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 0],
+      "position": [
+        220,
+        0
+      ],
       "notesInFlow": true,
       "notes": "CONFIGURACIÓN CENTRAL\nEdita los valores dentro del código.\nCambia AUTO_MODE a true para envío automático."
     },
@@ -38,7 +44,10 @@
       "name": "Verificar Horario",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 0]
+      "position": [
+        440,
+        0
+      ]
     },
     {
       "parameters": {
@@ -47,7 +56,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -58,7 +70,10 @@
       "name": "Scrape Workana",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 0],
+      "position": [
+        660,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 5000
@@ -71,7 +86,10 @@
       "name": "Parsear Proyectos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 0]
+      "position": [
+        880,
+        0
+      ]
     },
     {
       "parameters": {
@@ -82,7 +100,10 @@
       "name": "Filtrar Nuevos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 0]
+      "position": [
+        1100,
+        0
+      ]
     },
     {
       "parameters": {
@@ -91,7 +112,10 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "url", "value": "={{$json.url}}" }
+            {
+              "name": "url",
+              "value": "={{$json.url}}"
+            }
           ]
         }
       },
@@ -99,7 +123,10 @@
       "name": "Obtener Detalles",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1540, 0],
+      "position": [
+        1540,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 3000
@@ -112,7 +139,23 @@
       "name": "Combinar Datos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1760, 0]
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Construir body para OpenAI con escape seguro de caracteres\nconst d = $input.first().json;\n\nconst systemPrompt = `Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\n{\n  \"relevance_score\": 0-100,\n  \"red_flags\": [\"flag1\", \"flag2\"],\n  \"should_apply\": true/false,\n  \"proposal_text\": \"texto de la propuesta listo para copiar\",\n  \"questions_text\": \"preguntas para el cliente (1-2 máximo)\",\n  \"budget_suggested\": número en EUR,\n  \"delivery_days\": número,\n  \"skills_recommended\": [\"skill1\", \"skill2\"],\n  \"portfolio_items\": [\"item1\", \"item2\"],\n  \"internal_notes\": {\n    \"perfil_detectado\": \"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\",\n    \"dolor_real\": \"descripción\",\n    \"por_que_yo\": \"razón específica\",\n    \"tiempo_estimado\": \"rango\",\n    \"razonamiento_precio\": \"cómo llegaste al precio\"\n  }\n}\n\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.`;\n\nconst userPrompt = `Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\n\n# INSTRUCCIONES DE GENERACIÓN\n\n## OBJETIVO\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\n\n## PASO 0: FILTRO DE VIABILIDAD\nAnaliza si el proyecto merece propuesta. Red flags:\n- Presupuesto < 150 EUR para proyectos de desarrollo/IA\n- Descripción < 3 líneas sin posibilidad de inferir alcance\n- Cliente nuevo + presupuesto bajo + sin verificar pago\n- Frases como 'necesito algo sencillo', 'es rápido' sin presupuesto real\n- Proyecto fuera del stack (n8n, IA, chatbots, automatización, software, web)\n- Más de 30 propuestas enviadas\n\nSi hay 2+ red flags, pon should_apply: false y explica en red_flags.\n\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\n- Tono: FORMAL / CASUAL / URGENTE\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\n\n## PASO 2: DOLOR REAL\nIdentifica el problema de negocio DETRÁS de lo técnico.\n\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\n\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\n- TÉCNICO/NEGOCIO: Restatea su problema con observación experta\n- NOVATO/URGENTE: Hazles sentir que ya tienes la solución\n\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\n\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\n\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\n\n## PASO 4: PREGUNTAS (1-2 máximo)\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\n\n## PRESUPUESTO\nTarifa mínima: 40 EUR/h. Factor valor: 1.2-2.0. Sumar margen Workana 20%.\nRangos: Chatbot básico 350-700, con IA 700-1600, automatización n8n 500-1400, agente IA complejo 1400-3500, software/SaaS 2000-5500.\nNO menciones precio en la propuesta (se negocia en llamada).\n\n## ANTI-PATRONES\n- NO empezar con 'Hola, soy Alex y tengo X años...'\n- NO primera frase genérica\n- NO prometer plazos sin saber alcance\n- NO listar tecnologías sin beneficio\n- NO usar 'podría', 'creo que', 'quizás'\n- NO usar 'Quedo a tu disposición'\n- NO más de 200 palabras\n- NO más de 2 preguntas\n- NO mencionar precio\n\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\n- Sistema Integral de Logística y Envíos para E-commerce\n- Asistente Virtual Inteligente Multicanal 24/7\n- Automatización de Marketing de Contenidos\n- Chatbot Inteligente en WhatsApp con IA para Automatización\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\n\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\n\n---\n\nPROYECTO A ANALIZAR:\n\nTítulo: ${d.full_title || d.title}\nURL: ${d.url}\nDescripción: ${d.full_description || d.description}\nPresupuesto: ${d.budget_detail || d.budget_text || 'No especificado'}\nSkills: ${(d.skills_detail || d.skills || []).join(', ')}\nPropuestas actuales: ${d.proposals_count || 'Desconocido'}\nCliente: ${d.client_name || 'Desconocido'} (${d.client_country || '?'})\nRating: ${d.client_rating || 'Sin rating'}\nVerificado: ${d.client_verified ? 'Sí' : 'No'}\nFecha publicación: ${d.publish_date || 'Desconocido'}\nCategoría: ${d.category || 'IT & Programación'}\n\nTexto completo de la página:\n${(d.full_text || '').substring(0, 3000)}`;\n\nreturn [{\n  json: {\n    ...d,\n    openai_body: {\n      model: 'gpt-4o',\n      temperature: 0.4,\n      max_tokens: 2000,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt }\n      ]\n    }\n  }\n}];\n"
+      },
+      "id": "prepare-prompt",
+      "name": "Preparar Prompt IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1870,
+        0
+      ]
     },
     {
       "parameters": {
@@ -123,18 +166,24 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"gpt-4o\",\n  \"temperature\": 0.4,\n  \"max_tokens\": 2000,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\\n{\\n  \\\"relevance_score\\\": 0-100,\\n  \\\"red_flags\\\": [\\\"flag1\\\", \\\"flag2\\\"],\\n  \\\"should_apply\\\": true/false,\\n  \\\"proposal_text\\\": \\\"texto de la propuesta listo para copiar\\\",\\n  \\\"questions_text\\\": \\\"preguntas para el cliente (1-2 máximo)\\\",\\n  \\\"budget_suggested\\\": número en EUR,\\n  \\\"delivery_days\\\": número,\\n  \\\"skills_recommended\\\": [\\\"skill1\\\", \\\"skill2\\\"],\\n  \\\"portfolio_items\\\": [\\\"item1\\\", \\\"item2\\\"],\\n  \\\"internal_notes\\\": {\\n    \\\"perfil_detectado\\\": \\\"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\\\",\\n    \\\"dolor_real\\\": \\\"descripción\\\",\\n    \\\"por_que_yo\\\": \\\"razón específica\\\",\\n    \\\"tiempo_estimado\\\": \\\"rango\\\",\\n    \\\"razonamiento_precio\\\": \\\"cómo llegaste al precio\\\"\\n  }\\n}\\n\\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\\n\\n# INSTRUCCIONES DE GENERACIÓN\\n\\n## OBJETIVO\\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\\n\\n## PASO 0: FILTRO DE VIABILIDAD\\nAnaliza si el proyecto merece propuesta. Red flags:\\n- Presupuesto < €150 para proyectos de desarrollo/IA\\n- Descripción < 3 líneas sin posibilidad de inferir alcance\\n- Cliente nuevo + presupuesto bajo + sin verificar pago\\n- Frases como 'necesito algo sencillo', 'es rápido' sin presupuesto real\\n- Proyecto fuera del stack (n8n, IA, chatbots, automatización, software, web)\\n- Más de 30 propuestas enviadas\\n\\nSi hay 2+ red flags, pon should_apply: false y explica en red_flags.\\n\\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\\n- Tono: FORMAL / CASUAL / URGENTE\\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\\n\\n## PASO 2: DOLOR REAL\\nIdentifica el problema de negocio DETRÁS de lo técnico.\\n\\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\\n\\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\\n→ TÉCNICO/NEGOCIO: Restatea su problema con observación experta\\n→ NOVATO/URGENTE: Hazles sentir que ya tienes la solución\\n\\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\\n\\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\\n\\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\\n\\n## PASO 4: PREGUNTAS (1-2 máximo)\\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\\n\\n## PRESUPUESTO\\nTarifa mínima: €40/h. Factor valor: 1.2-2.0. Sumar margen Workana 20%.\\nRangos: Chatbot básico €350-700, con IA €700-1600, automatización n8n €500-1400, agente IA complejo €1400-3500, software/SaaS €2000-5500.\\nNO menciones precio en la propuesta (se negocia en llamada).\\n\\n## ANTI-PATRONES\\n❌ Empezar con 'Hola, soy Alex y tengo X años...'\\n❌ Primera frase genérica\\n❌ Prometer plazos sin saber alcance\\n❌ Listar tecnologías sin beneficio\\n❌ 'podría', 'creo que', 'quizás'\\n❌ 'Quedo a tu disposición'\\n❌ Más de 200 palabras\\n❌ Más de 2 preguntas\\n❌ Mencionar precio\\n\\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\\n- Sistema Integral de Logística y Envíos para E-commerce\\n- Asistente Virtual Inteligente Multicanal 24/7\\n- Automatización de Marketing de Contenidos\\n- Chatbot Inteligente en WhatsApp con IA para Automatización\\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\\n\\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\\n\\n---\\n\\nPROYECTO A ANALIZAR:\\n\\nTítulo: {{$json.full_title || $json.title}}\\nURL: {{$json.url}}\\nDescripción: {{$json.full_description || $json.description}}\\nPresupuesto: {{$json.budget_detail || $json.budget_text || 'No especificado'}}\\nSkills: {{($json.skills_detail || $json.skills || []).join(', ')}}\\nPropuestas actuales: {{$json.proposals_count || 'Desconocido'}}\\nCliente: {{$json.client_name || 'Desconocido'}} ({{$json.client_country || '?'}})\\nRating: {{$json.client_rating || 'Sin rating'}}\\nVerificado: {{$json.client_verified ? 'Sí' : 'No'}}\\nFecha publicación: {{$json.publish_date || 'Desconocido'}}\\nCategoría: {{$json.category || 'IT & Programación'}}\\n\\nTexto completo de la página:\\n{{($json.full_text || '').substring(0, 3000)}}\"\n    }\n  ]\n}"
+        "jsonBody": "={{ JSON.stringify($json.openai_body) }}"
       },
       "id": "generate-proposal",
       "name": "IA Genera Propuesta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1980, 0],
+      "position": [
+        2090,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 3000,
@@ -153,7 +202,10 @@
       "name": "Estructurar Datos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2200, 0]
+      "position": [
+        2310,
+        0
+      ]
     },
     {
       "parameters": {
@@ -161,21 +213,66 @@
         "tableId": "workana_projects",
         "fieldsUi": {
           "fieldValues": [
-            { "fieldName": "workana_url", "fieldValue": "={{$json.project.workana_url}}" },
-            { "fieldName": "title", "fieldValue": "={{$json.project.title}}" },
-            { "fieldName": "description", "fieldValue": "={{$json.project.description}}" },
-            { "fieldName": "category", "fieldValue": "={{$json.project.category}}" },
-            { "fieldName": "budget_text", "fieldValue": "={{$json.project.budget_text}}" },
-            { "fieldName": "skills", "fieldValue": "={{$json.project.skills}}" },
-            { "fieldName": "client_name", "fieldValue": "={{$json.project.client_name}}" },
-            { "fieldName": "client_country", "fieldValue": "={{$json.project.client_country}}" },
-            { "fieldName": "client_rating", "fieldValue": "={{$json.project.client_rating}}" },
-            { "fieldName": "client_verified", "fieldValue": "={{$json.project.client_verified}}" },
-            { "fieldName": "proposals_count", "fieldValue": "={{$json.project.proposals_count}}" },
-            { "fieldName": "publication_date", "fieldValue": "={{$json.project.publication_date}}" },
-            { "fieldName": "relevance_score", "fieldValue": "={{$json.project.relevance_score}}" },
-            { "fieldName": "red_flags", "fieldValue": "={{$json.project.red_flags}}" },
-            { "fieldName": "status", "fieldValue": "={{$json.project.status}}" }
+            {
+              "fieldName": "workana_url",
+              "fieldValue": "={{$json.project.workana_url}}"
+            },
+            {
+              "fieldName": "title",
+              "fieldValue": "={{$json.project.title}}"
+            },
+            {
+              "fieldName": "description",
+              "fieldValue": "={{$json.project.description}}"
+            },
+            {
+              "fieldName": "category",
+              "fieldValue": "={{$json.project.category}}"
+            },
+            {
+              "fieldName": "budget_text",
+              "fieldValue": "={{$json.project.budget_text}}"
+            },
+            {
+              "fieldName": "skills",
+              "fieldValue": "={{$json.project.skills}}"
+            },
+            {
+              "fieldName": "client_name",
+              "fieldValue": "={{$json.project.client_name}}"
+            },
+            {
+              "fieldName": "client_country",
+              "fieldValue": "={{$json.project.client_country}}"
+            },
+            {
+              "fieldName": "client_rating",
+              "fieldValue": "={{$json.project.client_rating}}"
+            },
+            {
+              "fieldName": "client_verified",
+              "fieldValue": "={{$json.project.client_verified}}"
+            },
+            {
+              "fieldName": "proposals_count",
+              "fieldValue": "={{$json.project.proposals_count}}"
+            },
+            {
+              "fieldName": "publication_date",
+              "fieldValue": "={{$json.project.publication_date}}"
+            },
+            {
+              "fieldName": "relevance_score",
+              "fieldValue": "={{$json.project.relevance_score}}"
+            },
+            {
+              "fieldName": "red_flags",
+              "fieldValue": "={{$json.project.red_flags}}"
+            },
+            {
+              "fieldName": "status",
+              "fieldValue": "={{$json.project.status}}"
+            }
           ]
         }
       },
@@ -183,7 +280,10 @@
       "name": "Guardar Proyecto",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
-      "position": [2420, 0],
+      "position": [
+        2530,
+        0
+      ],
       "credentials": {
         "supabaseApi": {
           "id": "",
@@ -199,7 +299,10 @@
       "name": "Preparar Propuesta",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2640, 0]
+      "position": [
+        2750,
+        0
+      ]
     },
     {
       "parameters": {
@@ -207,14 +310,38 @@
         "tableId": "workana_proposals",
         "fieldsUi": {
           "fieldValues": [
-            { "fieldName": "project_id", "fieldValue": "={{$json.project_id}}" },
-            { "fieldName": "proposal_text", "fieldValue": "={{$json.proposal_text}}" },
-            { "fieldName": "questions_text", "fieldValue": "={{$json.questions_text}}" },
-            { "fieldName": "budget_suggested", "fieldValue": "={{$json.budget_suggested}}" },
-            { "fieldName": "delivery_days", "fieldValue": "={{$json.delivery_days}}" },
-            { "fieldName": "skills_recommended", "fieldValue": "={{$json.skills_recommended}}" },
-            { "fieldName": "portfolio_items", "fieldValue": "={{$json.portfolio_items}}" },
-            { "fieldName": "internal_notes", "fieldValue": "={{$json.internal_notes}}" }
+            {
+              "fieldName": "project_id",
+              "fieldValue": "={{$json.project_id}}"
+            },
+            {
+              "fieldName": "proposal_text",
+              "fieldValue": "={{$json.proposal_text}}"
+            },
+            {
+              "fieldName": "questions_text",
+              "fieldValue": "={{$json.questions_text}}"
+            },
+            {
+              "fieldName": "budget_suggested",
+              "fieldValue": "={{$json.budget_suggested}}"
+            },
+            {
+              "fieldName": "delivery_days",
+              "fieldValue": "={{$json.delivery_days}}"
+            },
+            {
+              "fieldName": "skills_recommended",
+              "fieldValue": "={{$json.skills_recommended}}"
+            },
+            {
+              "fieldName": "portfolio_items",
+              "fieldValue": "={{$json.portfolio_items}}"
+            },
+            {
+              "fieldName": "internal_notes",
+              "fieldValue": "={{$json.internal_notes}}"
+            }
           ]
         }
       },
@@ -222,7 +349,10 @@
       "name": "Guardar Propuesta",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
-      "position": [2860, 0],
+      "position": [
+        2970,
+        0
+      ],
       "credentials": {
         "supabaseApi": {
           "id": "",
@@ -233,19 +363,29 @@
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "auto-check",
               "leftValue": "={{$('CONFIG').item.json.AUTO_MODE}}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "equals" }
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
             },
             {
               "id": "relevance-check",
               "leftValue": "={{$('Preparar Propuesta').item.json.project.relevance_score}}",
               "rightValue": "={{parseInt($('CONFIG').item.json.MIN_RELEVANCE_AUTO)}}",
-              "operator": { "type": "number", "operation": "gte" }
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
             }
           ],
           "combinator": "and"
@@ -255,7 +395,10 @@
       "name": "Auto Mode?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [3080, 0]
+      "position": [
+        3190,
+        0
+      ]
     },
     {
       "parameters": {
@@ -264,7 +407,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -275,7 +421,10 @@
       "name": "Enviar Automático",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3300, -150],
+      "position": [
+        3410,
+        -150
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 5000
@@ -288,17 +437,28 @@
       "name": "Resultado Auto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3520, -150]
+      "position": [
+        3630,
+        -150
+      ]
     },
     {
       "parameters": {
         "operation": "update",
         "tableId": "workana_projects",
-        "matchingColumns": ["id"],
+        "matchingColumns": [
+          "id"
+        ],
         "fieldsUi": {
           "fieldValues": [
-            { "fieldName": "status", "fieldValue": "={{$json.success ? 'sent' : 'proposal_generated'}}" },
-            { "fieldName": "auto_sent", "fieldValue": "={{$json.auto_sent}}" }
+            {
+              "fieldName": "status",
+              "fieldValue": "={{$json.success ? 'sent' : 'proposal_generated'}}"
+            },
+            {
+              "fieldName": "auto_sent",
+              "fieldValue": "={{$json.auto_sent}}"
+            }
           ]
         }
       },
@@ -306,7 +466,10 @@
       "name": "Actualizar Estado",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
-      "position": [3740, -150],
+      "position": [
+        3850,
+        -150
+      ],
       "credentials": {
         "supabaseApi": {
           "id": "",
@@ -322,7 +485,10 @@
       "name": "Ruta Manual",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3300, 150]
+      "position": [
+        3410,
+        150
+      ]
     },
     {
       "parameters": {
@@ -332,7 +498,10 @@
       "name": "Formatear WhatsApp",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3960, 0]
+      "position": [
+        4070,
+        0
+      ]
     },
     {
       "parameters": {
@@ -343,7 +512,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
@@ -354,7 +526,10 @@
       "name": "Enviar WhatsApp",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [4180, 0],
+      "position": [
+        4290,
+        0
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "",
@@ -368,9 +543,18 @@
         "tableId": "workana_logs",
         "fieldsUi": {
           "fieldValues": [
-            { "fieldName": "action", "fieldValue": "proposal_processed" },
-            { "fieldName": "success", "fieldValue": true },
-            { "fieldName": "details", "fieldValue": "={{ { project_title: $json.project_title || 'Sin título', auto_sent: $json.auto_sent || false } }}" }
+            {
+              "fieldName": "action",
+              "fieldValue": "proposal_processed"
+            },
+            {
+              "fieldName": "success",
+              "fieldValue": true
+            },
+            {
+              "fieldName": "details",
+              "fieldValue": "={{ { project_title: $json.project_title || 'Sin título', auto_sent: $json.auto_sent || false } }}"
+            }
           ]
         }
       },
@@ -378,7 +562,10 @@
       "name": "Log Acción",
       "type": "n8n-nodes-base.supabase",
       "typeVersion": 1,
-      "position": [4400, 0],
+      "position": [
+        4510,
+        0
+      ],
       "credentials": {
         "supabaseApi": {
           "id": "",
@@ -396,72 +583,250 @@
       "name": "Info",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [-300, -200]
+      "position": [
+        -300,
+        -200
+      ]
     }
   ],
   "connections": {
     "Cada 30 min": {
-      "main": [[{ "node": "CONFIG", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "CONFIG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "CONFIG": {
-      "main": [[{ "node": "Verificar Horario", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Verificar Horario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Verificar Horario": {
-      "main": [[{ "node": "Scrape Workana", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Scrape Workana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Scrape Workana": {
-      "main": [[{ "node": "Parsear Proyectos", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Parsear Proyectos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Parsear Proyectos": {
-      "main": [[{ "node": "Filtrar Nuevos", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Filtrar Nuevos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Filtrar Nuevos": {
-      "main": [[{ "node": "Obtener Detalles", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Obtener Detalles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Obtener Detalles": {
-      "main": [[{ "node": "Combinar Datos", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Combinar Datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Combinar Datos": {
-      "main": [[{ "node": "IA Genera Propuesta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Preparar Prompt IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "IA Genera Propuesta": {
-      "main": [[{ "node": "Estructurar Datos", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Estructurar Datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Estructurar Datos": {
-      "main": [[{ "node": "Guardar Proyecto", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Guardar Proyecto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Guardar Proyecto": {
-      "main": [[{ "node": "Preparar Propuesta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Preparar Propuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Preparar Propuesta": {
-      "main": [[{ "node": "Guardar Propuesta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Guardar Propuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Guardar Propuesta": {
-      "main": [[{ "node": "Auto Mode?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Auto Mode?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Auto Mode?": {
       "main": [
-        [{ "node": "Enviar Automático", "type": "main", "index": 0 }],
-        [{ "node": "Ruta Manual", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Enviar Automático",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ruta Manual",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Enviar Automático": {
-      "main": [[{ "node": "Resultado Auto", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Resultado Auto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Resultado Auto": {
-      "main": [[{ "node": "Actualizar Estado", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Actualizar Estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Actualizar Estado": {
-      "main": [[{ "node": "Formatear WhatsApp", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Formatear WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Ruta Manual": {
-      "main": [[{ "node": "Formatear WhatsApp", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Formatear WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Formatear WhatsApp": {
-      "main": [[{ "node": "Enviar WhatsApp", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Enviar WhatsApp": {
-      "main": [[{ "node": "Log Acción", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Log Acción",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Prompt IA": {
+      "main": [
+        [
+          {
+            "node": "IA Genera Propuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -472,8 +837,14 @@
   },
   "staticData": null,
   "tags": [
-    { "name": "workana" },
-    { "name": "autopilot" },
-    { "name": "automation" }
+    {
+      "name": "workana"
+    },
+    {
+      "name": "autopilot"
+    },
+    {
+      "name": "automation"
+    }
   ]
 }
