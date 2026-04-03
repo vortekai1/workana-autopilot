@@ -23,6 +23,8 @@
         "values": {
           "string": [
             { "name": "PUPPETEER_URL", "value": "https://workana-auto-pilot.ioefpm.easypanel.host" },
+            { "name": "SUPABASE_URL", "value": "https://zcmqcosuvjndgcwylzna.supabase.co" },
+            { "name": "SUPABASE_KEY", "value": "TU_SERVICE_ROLE_KEY_AQUI" },
             { "name": "EVOLUTION_URL", "value": "https://evo.vortekai.es" },
             { "name": "EVOLUTION_INSTANCE", "value": "WorkanaBot" },
             { "name": "WHATSAPP_NUMBER", "value": "34XXXXXXXXX" },
@@ -80,7 +82,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extraer proyectos del resultado del scraping\nconst data = $input.first().json;\n\nif (!data.success || !data.projects || data.projects.length === 0) {\n  console.log('No se encontraron proyectos o error en scraping');\n  return [];\n}\n\n// Devolver cada proyecto como item individual con config simplificada\nreturn data.projects.map(project => ({\n  json: {\n    ...project,\n    config: {\n      PUPPETEER_URL: $('CONFIG').item.json.PUPPETEER_URL,\n      EVOLUTION_URL: $('CONFIG').item.json.EVOLUTION_URL,\n      EVOLUTION_INSTANCE: $('CONFIG').item.json.EVOLUTION_INSTANCE,\n      WHATSAPP_NUMBER: $('CONFIG').item.json.WHATSAPP_NUMBER,\n      AUTO_MODE: $('CONFIG').item.json.AUTO_MODE,\n      MIN_RELEVANCE_AUTO: parseInt($('CONFIG').item.json.MIN_RELEVANCE_AUTO),\n      MAX_PROPOSALS_ON_PROJECT: parseInt($('CONFIG').item.json.MAX_PROPOSALS_ON_PROJECT),\n    }\n  }\n}));"
+        "jsCode": "// Extraer proyectos del resultado del scraping\nconst data = $input.first().json;\n\nif (!data.success || !data.projects || data.projects.length === 0) {\n  console.log('No se encontraron proyectos o error en scraping');\n  return [];\n}\n\n// Devolver cada proyecto como item individual con config\nreturn data.projects.map(project => ({\n  json: {\n    ...project,\n    config: {\n      PUPPETEER_URL: $('CONFIG').item.json.PUPPETEER_URL,\n      SUPABASE_URL: $('CONFIG').item.json.SUPABASE_URL,\n      SUPABASE_KEY: $('CONFIG').item.json.SUPABASE_KEY,\n      EVOLUTION_URL: $('CONFIG').item.json.EVOLUTION_URL,\n      EVOLUTION_INSTANCE: $('CONFIG').item.json.EVOLUTION_INSTANCE,\n      WHATSAPP_NUMBER: $('CONFIG').item.json.WHATSAPP_NUMBER,\n      AUTO_MODE: $('CONFIG').item.json.AUTO_MODE,\n      MIN_RELEVANCE_AUTO: parseInt($('CONFIG').item.json.MIN_RELEVANCE_AUTO),\n      MAX_PROPOSALS_ON_PROJECT: parseInt($('CONFIG').item.json.MAX_PROPOSALS_ON_PROJECT),\n    }\n  }\n}));"
       },
       "id": "parse-projects",
       "name": "Parsear Proyectos",
@@ -90,29 +92,32 @@
     },
     {
       "parameters": {
-        "operation": "getAll",
-        "tableId": "workana_projects",
-        "returnAll": false,
-        "limit": 1,
-        "filterType": "string",
-        "filterString": "=workana_url=eq.{{$json.url}}"
+        "method": "GET",
+        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_projects",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "select", "value": "workana_url" },
+            { "name": "workana_url", "value": "=eq.{{$json.url}}" }
+          ]
+        }
       },
       "id": "check-existing",
       "name": "Ya existe en DB?",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [1100, 0],
-      "alwaysOutputData": true,
-      "credentials": {
-        "supabaseApi": {
-          "id": "",
-          "name": "Supabase crm-vortek"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0]
     },
     {
       "parameters": {
-        "jsCode": "// Si el proyecto ya existe en Supabase, lo saltamos\nconst result = $input.first().json;\nconst projectData = $('Parsear Proyectos').item.json;\n\n// Si la respuesta del nodo Supabase tiene workana_url, ya existe\nif (result && result.workana_url) {\n  console.log(`Proyecto ya existe: ${projectData.title}`);\n  return [];\n}\n\n// Proyecto nuevo - continuar\nreturn [{ json: projectData }];"
+        "jsCode": "// Si el proyecto ya existe en Supabase, lo saltamos\nconst existingCheck = $input.first().json;\nconst projectData = $('Parsear Proyectos').item.json;\n\n// La respuesta HTTP es un array: [] = no existe, [{...}] = existe\nif (Array.isArray(existingCheck) && existingCheck.length > 0) {\n  console.log(`Proyecto ya existe: ${projectData.title}`);\n  return [];\n}\n\n// Proyecto nuevo - continuar\nreturn [{ json: projectData }];"
       },
       "id": "filter-new",
       "name": "Filtrar Nuevos",
