@@ -24,10 +24,10 @@
           "string": [
             { "name": "PUPPETEER_URL", "value": "https://workana-auto-pilot.ioefpm.easypanel.host" },
             { "name": "SUPABASE_URL", "value": "https://zcmqcosuvjndgcwylzna.supabase.co" },
-            { "name": "SUPABASE_KEY", "value": "TU_SERVICE_ROLE_KEY_AQUI" },
+            { "name": "SUPABASE_KEY", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM" },
             { "name": "EVOLUTION_URL", "value": "https://evo.vortekai.es" },
-            { "name": "EVOLUTION_INSTANCE", "value": "WorkanaBot" },
-            { "name": "WHATSAPP_NUMBER", "value": "34XXXXXXXXX" },
+            { "name": "EVOLUTION_INSTANCE", "value": "Ventas vortek" },
+            { "name": "WHATSAPP_NUMBER", "value": "34628706539" },
             { "name": "SEARCH_CATEGORIES", "value": "it-programming" },
             { "name": "SEARCH_PAGES", "value": "2" },
             { "name": "MIN_RELEVANCE_AUTO", "value": "80" },
