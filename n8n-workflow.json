@@ -20,32 +20,15 @@
     },
     {
       "parameters": {
-        "values": {
-          "string": [
-            { "name": "PUPPETEER_URL", "value": "https://workana-auto-pilot.ioefpm.easypanel.host" },
-            { "name": "SUPABASE_URL", "value": "https://zcmqcosuvjndgcwylzna.supabase.co" },
-            { "name": "SUPABASE_KEY", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM" },
-            { "name": "EVOLUTION_URL", "value": "https://evo.vortekai.es" },
-            { "name": "EVOLUTION_INSTANCE", "value": "Ventas vortek" },
-            { "name": "WHATSAPP_NUMBER", "value": "34628706539" },
-            { "name": "SEARCH_CATEGORIES", "value": "it-programming" },
-            { "name": "SEARCH_PAGES", "value": "2" },
-            { "name": "MIN_RELEVANCE_AUTO", "value": "80" },
-            { "name": "MAX_PROPOSALS_DAY", "value": "35" },
-            { "name": "MAX_PROPOSALS_ON_PROJECT", "value": "30" }
-          ],
-          "boolean": [
-            { "name": "AUTO_MODE", "value": false }
-          ]
-        }
+        "jsCode": "// ============================================\n// CONFIGURACIÓN CENTRAL - Edita los valores aquí\n// ============================================\nreturn [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34628706539',\n    SEARCH_CATEGORIES: 'it-programming',\n    SEARCH_PAGES: '2',\n    MIN_RELEVANCE_AUTO: '80',\n    MAX_PROPOSALS_DAY: '35',\n    MAX_PROPOSALS_ON_PROJECT: '30',\n    AUTO_MODE: false,\n  }\n}];"
       },
       "id": "config",
       "name": "CONFIG",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [220, 0],
       "notesInFlow": true,
-      "notes": "CONFIGURACIÓN CENTRAL\nCredenciales de Supabase y OpenAI se configuran en los nodos nativos.\nCambia AUTO_MODE a true para envío automático."
+      "notes": "CONFIGURACIÓN CENTRAL\nEdita los valores dentro del código.\nCambia AUTO_MODE a true para envío automático."
     },
     {
       "parameters": {
