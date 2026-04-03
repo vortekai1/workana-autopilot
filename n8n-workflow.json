@@ -92,38 +92,14 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{$json.config.SUPABASE_URL}}/rest/v1/workana_projects",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{$json.config.SUPABASE_KEY}}" },
-            { "name": "Authorization", "value": "=Bearer {{$json.config.SUPABASE_KEY}}" }
-          ]
-        },
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            { "name": "select", "value": "workana_url" },
-            { "name": "workana_url", "value": "=eq.{{$json.url}}" }
-          ]
-        }
-      },
-      "id": "check-existing",
-      "name": "Ya existe en DB?",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1100, 0]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Si el proyecto ya existe en Supabase, lo saltamos\nconst existingCheck = $input.first().json;\nconst projectData = $('Parsear Proyectos').item.json;\n\n// La respuesta HTTP es un array: [] = no existe, [{...}] = existe\nif (Array.isArray(existingCheck) && existingCheck.length > 0) {\n  console.log(`Proyecto ya existe: ${projectData.title}`);\n  return [];\n}\n\n// Proyecto nuevo - continuar\nreturn [{ json: projectData }];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Filtrar proyectos nuevos - UNA sola consulta a Supabase para todos\nconst items = $input.all();\n\nif (items.length === 0) return [];\n\nconst config = items[0].json.config;\n\n// Obtener TODOS los URLs existentes de Supabase en una sola consulta\nlet existingUrls = new Set();\ntry {\n  const resp = await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_projects?select=workana_url`,\n    {\n      headers: {\n        'apikey': config.SUPABASE_KEY,\n        'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n      }\n    }\n  );\n  const existing = await resp.json();\n  if (Array.isArray(existing)) {\n    existingUrls = new Set(existing.map(r => r.workana_url));\n  }\n} catch (error) {\n  console.error('Error consultando Supabase:', error.message);\n  // Si falla, continuar con todos (mejor duplicar que perder)\n}\n\n// Filtrar solo proyectos nuevos\nconst newItems = items.filter(item => !existingUrls.has(item.json.url));\n\nconsole.log(`Total: ${items.length}, Nuevos: ${newItems.length}, Ya existentes: ${items.length - newItems.length}`);\n\nreturn newItems;"
       },
       "id": "filter-new",
       "name": "Filtrar Nuevos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 0]
+      "position": [1100, 0]
     },
     {
       "parameters": {
@@ -454,9 +430,6 @@
       "main": [[{ "node": "Parsear Proyectos", "type": "main", "index": 0 }]]
     },
     "Parsear Proyectos": {
-      "main": [[{ "node": "Ya existe en DB?", "type": "main", "index": 0 }]]
-    },
-    "Ya existe en DB?": {
       "main": [[{ "node": "Filtrar Nuevos", "type": "main", "index": 0 }]]
     },
     "Filtrar Nuevos": {
