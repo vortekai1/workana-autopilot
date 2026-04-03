@@ -138,6 +138,34 @@ app.get('/screenshot', async (req, res) => {
   }
 });
 
+// Debug: ver HTML de una página (para diagnosticar sin screenshots)
+app.get('/debug-html', async (req, res) => {
+  try {
+    const { url } = req.query;
+    const page = await browserManager.newPage();
+    try {
+      await page.goto(url || 'https://www.workana.com/login', {
+        waitUntil: 'networkidle2',
+        timeout: 30000,
+      });
+      await browserManager.randomDelay(2000, 3000);
+      const html = await page.content();
+      const currentUrl = page.url();
+      const title = await page.title();
+      res.json({
+        success: true,
+        currentUrl,
+        title,
+        html: html.substring(0, 15000),
+      });
+    } finally {
+      await page.close();
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ============================================
 // ARRANQUE
 // ============================================

@@ -128,9 +128,13 @@ class BrowserManager {
       ];
 
       let emailField = null;
+      let emailSelector = null;
       for (const sel of emailSelectors) {
         emailField = await page.$(sel);
-        if (emailField) break;
+        if (emailField) {
+          emailSelector = sel;
+          break;
+        }
       }
 
       if (!emailField) {
@@ -138,7 +142,10 @@ class BrowserManager {
         await this.randomDelay(5000, 8000);
         for (const sel of emailSelectors) {
           emailField = await page.$(sel);
-          if (emailField) break;
+          if (emailField) {
+            emailSelector = sel;
+            break;
+          }
         }
       }
 
@@ -151,11 +158,7 @@ class BrowserManager {
       }
 
       // Escribir email
-      await this.humanType(
-        page,
-        emailField ? '#email' : 'input[name="email"]',
-        this.email
-      );
+      await this.humanType(page, emailSelector, this.email);
       await this.randomDelay(800, 1500);
 
       // Escribir password
@@ -257,7 +260,8 @@ class BrowserManager {
       }
 
       await this.randomDelay(1000, 2000);
-      return await page.screenshot({ type: 'png', fullPage: false });
+      const screenshot = await page.screenshot({ type: 'png', fullPage: false });
+      return Buffer.from(screenshot);
     } finally {
       await page.close();
     }
