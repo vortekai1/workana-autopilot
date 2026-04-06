@@ -1,5 +1,5 @@
 {
-  "name": "Workana Autopilot v2",
+  "name": "Workana Autopilot v3",
   "nodes": [
     {
       "parameters": {
@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================\n// CONFIGURACIÓN CENTRAL - Edita los valores aquí\n// ============================================\nreturn [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34628706539',\n    SEARCH_CATEGORIES: 'it-programming',\n    SEARCH_PAGES: '2',\n    MIN_RELEVANCE_AUTO: '80',\n    MAX_PROPOSALS_WEEK_MIN: 50,\n    MAX_PROPOSALS_WEEK_MAX: 60,\n    MAX_PROPOSALS_ON_PROJECT: '50',\n    AUTO_MODE: false,\n  }\n}];"
+        "jsCode": "// ============================================\n// CONFIGURACIÓN CENTRAL - Edita los valores aquí\n// ============================================\nreturn [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34628706539',\n    SEARCH_CATEGORIES: ['it-programming', 'design-multimedia', 'writing-translation', 'admin-support'],\n    SEARCH_PAGES: '2',\n    MIN_RELEVANCE_AUTO: '80',\n    MAX_PROPOSALS_WEEK_MIN: 50,\n    MAX_PROPOSALS_WEEK_MAX: 60,\n    MAX_PROPOSALS_ON_PROJECT: '50',\n    AUTO_MODE: false,\n  }\n}];"
       },
       "id": "config",
       "name": "CONFIG",
@@ -38,7 +38,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Control inteligente: horario + cuota semanal + aleatorización\n// -------------------------------------------------------\n// 1. Solo ejecuta en horario laboral (L-S, 8:00-22:00 Madrid)\n// 2. Consulta Supabase para contar propuestas enviadas esta semana\n// 3. Genera un objetivo semanal aleatorio (50-60) determinista por semana\n// 4. Calcula la probabilidad de ejecutar AHORA según lo que falta\n// 5. Lanza un dado: si no toca, devuelve [] y el workflow para\n// -------------------------------------------------------\n\nconst config = $input.first().json;\nconst now = new Date();\nconst madridTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst hour = madridTime.getHours();\nconst day = madridTime.getDay(); // 0=domingo\n\n// ─── 1. Horario laboral ───\nif (hour < 8 || hour >= 22 || day === 0) {\n  return []; // Fuera de horario\n}\n\n// ─── 2. Objetivo semanal determinista ───\n// Seed basado en año+semana → mismo objetivo toda la semana\nfunction seededRandom(seed) {\n  const x = Math.sin(seed * 9999) * 10000;\n  return x - Math.floor(x);\n}\nconst oneJan = new Date(madridTime.getFullYear(), 0, 1);\nconst weekNumber = Math.ceil(((madridTime - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);\nconst weekSeed = madridTime.getFullYear() * 100 + weekNumber;\nconst minWeek = config.MAX_PROPOSALS_WEEK_MIN || 50;\nconst maxWeek = config.MAX_PROPOSALS_WEEK_MAX || 60;\nconst weeklyTarget = Math.floor(minWeek + seededRandom(weekSeed) * (maxWeek - minWeek + 1));\n\n// ─── 3. Contar propuestas esta semana (lunes a ahora) ───\nconst startOfWeek = new Date(madridTime);\nconst dayOfWeek = startOfWeek.getDay() === 0 ? 7 : startOfWeek.getDay(); // ISO: lunes=1\nstartOfWeek.setDate(startOfWeek.getDate() - (dayOfWeek - 1));\nstartOfWeek.setHours(0, 0, 0, 0);\nconst startISO = startOfWeek.toISOString();\n\nlet proposalsThisWeek = 0;\ntry {\n  const resp = await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_proposals?select=id&created_at=gte.${startISO}`,\n    {\n      headers: {\n        'apikey': config.SUPABASE_KEY,\n        'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n      }\n    }\n  );\n  const proposals = await resp.json();\n  proposalsThisWeek = Array.isArray(proposals) ? proposals.length : 0;\n} catch (error) {\n  console.error('Error consultando cuota semanal:', error.message);\n  // Si falla la consulta, continuar para no bloquear\n}\n\n// ─── 4. ¿Ya alcanzamos la cuota? ───\nconst remaining = weeklyTarget - proposalsThisWeek;\nif (remaining <= 0) {\n  console.log(`⛔ Cuota semanal alcanzada: ${proposalsThisWeek}/${weeklyTarget}. Parando.`);\n  return [];\n}\n\n// ─── 5. Calcular probabilidad de ejecutar AHORA ───\n// Horas restantes de trabajo esta semana (L-S, 14h/día)\nconst daysLeftAfterToday = 6 - dayOfWeek; // sábado=6 → 0 días más\nconst hoursLeftToday = Math.max(0, 22 - hour);\nconst totalHoursLeft = (daysLeftAfterToday * 14) + hoursLeftToday;\nconst executionsLeft = Math.max(1, totalHoursLeft * 2); // 2 ejecuciones/hora (cada 30 min)\n\n// Probabilidad = propuestas restantes / ejecuciones restantes\n// Si vamos retrasados → probabilidad sube\n// Si vamos adelantados → probabilidad baja\nconst probability = Math.min(0.95, remaining / executionsLeft);\n\n// ─── 6. Lanzar dado ───\nconst roll = Math.random();\nif (roll > probability) {\n  console.log(`⏭️ Skip aleatorio (prob: ${(probability * 100).toFixed(1)}%, enviadas: ${proposalsThisWeek}/${weeklyTarget}, quedan: ${remaining})`);\n  return [];\n}\n\nconsole.log(`✅ Ejecutando (prob: ${(probability * 100).toFixed(1)}%, enviadas: ${proposalsThisWeek}/${weeklyTarget}, objetivo: ${weeklyTarget})`);\n\nreturn [{\n  json: {\n    ...config,\n    current_hour: hour,\n    current_day: day,\n    proposals_this_week: proposalsThisWeek,\n    weekly_target: weeklyTarget,\n    remaining_this_week: remaining,\n    timestamp: now.toISOString()\n  }\n}];"
+        "jsCode": "// Control inteligente: horario + cuota semanal + aleatorización\n// -------------------------------------------------------\n// 1. Solo ejecuta en horario laboral (L-S, 8:00-22:00 Madrid)\n// 2. Consulta Supabase para contar propuestas enviadas esta semana\n// 3. Genera un objetivo semanal aleatorio (50-60) determinista por semana\n// 4. Calcula la probabilidad de ejecutar AHORA según lo que falta\n// 5. Lanza un dado: si no toca, devuelve [] y el workflow para\n// -------------------------------------------------------\n\nconst config = $input.first().json;\nconst now = new Date();\nconst madridTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst hour = madridTime.getHours();\nconst day = madridTime.getDay(); // 0=domingo\n\n// ─── 1. Horario laboral ───\nif (hour < 8 || hour >= 22 || day === 0) {\n  return []; // Fuera de horario\n}\n\n// ─── 2. Objetivo semanal determinista ───\n// Seed basado en año+semana → mismo objetivo toda la semana\nfunction seededRandom(seed) {\n  const x = Math.sin(seed * 9999) * 10000;\n  return x - Math.floor(x);\n}\nconst oneJan = new Date(madridTime.getFullYear(), 0, 1);\nconst weekNumber = Math.ceil(((madridTime - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);\nconst weekSeed = madridTime.getFullYear() * 100 + weekNumber;\nconst minWeek = config.MAX_PROPOSALS_WEEK_MIN || 50;\nconst maxWeek = config.MAX_PROPOSALS_WEEK_MAX || 60;\nconst weeklyTarget = Math.floor(minWeek + seededRandom(weekSeed) * (maxWeek - minWeek + 1));\n\n// ─── 3. Contar propuestas esta semana (lunes a ahora) ───\nconst startOfWeek = new Date(madridTime);\nconst dayOfWeek = startOfWeek.getDay() === 0 ? 7 : startOfWeek.getDay(); // ISO: lunes=1\nstartOfWeek.setDate(startOfWeek.getDate() - (dayOfWeek - 1));\nstartOfWeek.setHours(0, 0, 0, 0);\nconst startISO = startOfWeek.toISOString();\n\nlet proposalsThisWeek = 0;\ntry {\n  const resp = await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_proposals?select=id&created_at=gte.${startISO}`,\n    {\n      headers: {\n        'apikey': config.SUPABASE_KEY,\n        'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n      }\n    }\n  );\n  const proposals = await resp.json();\n  proposalsThisWeek = Array.isArray(proposals) ? proposals.length : 0;\n} catch (error) {\n  console.error('Error consultando cuota semanal:', error.message);\n  // Si falla la consulta, continuar para no bloquear\n}\n\n// ─── 4. ¿Ya alcanzamos la cuota? ───\nconst remaining = weeklyTarget - proposalsThisWeek;\nif (remaining <= 0) {\n  console.log(`⛔ Cuota semanal alcanzada: ${proposalsThisWeek}/${weeklyTarget}. Parando.`);\n  return [];\n}\n\n// ─── 5. Calcular probabilidad de ejecutar AHORA ───\n// Horas restantes de trabajo esta semana (L-S, 14h/día)\nconst daysLeftAfterToday = 6 - dayOfWeek; // sábado=6 → 0 días más\nconst hoursLeftToday = Math.max(0, 22 - hour);\nconst totalHoursLeft = (daysLeftAfterToday * 14) + hoursLeftToday;\nconst executionsLeft = Math.max(1, totalHoursLeft * 2); // 2 ejecuciones/hora (cada 30 min)\n\n// Probabilidad = propuestas restantes / ejecuciones restantes\n// Si vamos retrasados → probabilidad sube\n// Si vamos adelantados → probabilidad baja\nconst probability = Math.min(0.95, remaining / executionsLeft);\n\n// ─── 5.5. Pre-check: proyectos frescos en DB ───\nlet hasFreshProjects = false;\ntry {\n  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();\n  const freshResp = await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_projects?select=id&status=eq.new&created_at=gte.${twoHoursAgo}&proposals_count=lt.10&limit=1`,\n    {\n      headers: {\n        'apikey': config.SUPABASE_KEY,\n        'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n      }\n    }\n  );\n  const fresh = await freshResp.json();\n  hasFreshProjects = Array.isArray(fresh) && fresh.length > 0;\n} catch (e) { /* no bloquear */ }\n\n// ─── 6. Lanzar dado ───\nconst roll = Math.random();\nif (roll > probability && !hasFreshProjects) {\n  console.log(`⏭️ Skip aleatorio (prob: ${(probability * 100).toFixed(1)}%, enviadas: ${proposalsThisWeek}/${weeklyTarget}, quedan: ${remaining})`);\n  return [];\n}\n\nif (hasFreshProjects) {\n  console.log('🔥 Proyectos frescos detectados - ejecutando sin importar el dado');\n}\n\nconsole.log(`✅ Ejecutando (prob: ${(probability * 100).toFixed(1)}%, enviadas: ${proposalsThisWeek}/${weeklyTarget}, objetivo: ${weeklyTarget})`);\n\nreturn [{\n  json: {\n    ...config,\n    current_hour: hour,\n    current_day: day,\n    proposals_this_week: proposalsThisWeek,\n    weekly_target: weeklyTarget,\n    remaining_this_week: remaining,\n    timestamp: now.toISOString()\n  }\n}];"
       },
       "id": "check-schedule",
       "name": "Control Cuota y Horario",
@@ -64,14 +64,14 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"categories\": [\"{{$('CONFIG').item.json.SEARCH_CATEGORIES}}\"],\n  \"pages\": {{$('CONFIG').item.json.SEARCH_PAGES}},\n  \"language\": \"es\"\n}"
+        "jsonBody": "={{ JSON.stringify({ categories: $('CONFIG').item.json.SEARCH_CATEGORIES, pages: parseInt($('CONFIG').item.json.SEARCH_PAGES), language: 'es' }) }}"
       },
       "id": "scrape-projects",
       "name": "Scrape Workana",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
+        1160,
         0
       ],
       "retryOnFail": true,
@@ -87,7 +87,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
+        1380,
         0
       ]
     },
@@ -101,7 +101,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1100,
+        1600,
         0
       ]
     },
@@ -124,7 +124,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1540,
+        2040,
         0
       ],
       "retryOnFail": true,
@@ -140,20 +140,20 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1760,
+        2260,
         0
       ]
     },
     {
       "parameters": {
-        "jsCode": "// Construir body para OpenAI - Selección focalizada + precio justo con Claude Code\nconst d = $input.first().json;\n\nconst systemPrompt = `Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\n{\n  \"relevance_score\": 0-100,\n  \"red_flags\": [\"flag1\", \"flag2\"],\n  \"should_apply\": true/false,\n  \"proposal_text\": \"texto de la propuesta listo para copiar\",\n  \"questions_text\": \"preguntas para el cliente (1-2 máximo)\",\n  \"budget_suggested\": número en EUR,\n  \"delivery_days\": número,\n  \"skills_recommended\": [\"skill1\", \"skill2\"],\n  \"portfolio_items\": [\"item1\", \"item2\"],\n  \"internal_notes\": {\n    \"perfil_detectado\": \"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\",\n    \"dolor_real\": \"descripción\",\n    \"por_que_yo\": \"razón específica\",\n    \"tiempo_estimado\": \"rango\",\n    \"razonamiento_precio\": \"cómo llegaste al precio\"\n  }\n}\n\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.`;\n\nconst userPrompt = `Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\n\n# INSTRUCCIONES DE GENERACIÓN\n\n## OBJETIVO\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\n\n## PASO 0: FILTRO DE VIABILIDAD — FOCALIZADO EN NUESTRAS ÁREAS\nAplicamos (should_apply: true) SOLO si el proyecto encaja en ALGUNA de estas categorías:\n\n### CATEGORÍAS QUE ACEPTAMOS:\n1. **Inteligencia Artificial / Machine Learning**: chatbots, agentes IA, RAG, NLP, automatización con IA, integración de APIs de IA (OpenAI, Claude, etc.)\n2. **Creación de páginas web**: landing pages, sitios corporativos, e-commerce, WordPress, Webflow, tiendas online, blogs, portafolios\n3. **Desarrollo de software**: aplicaciones web, SaaS, plataformas, dashboards, CRM, ERP, sistemas a medida, APIs, backends, frontends\n4. **Automatización y bots**: n8n, Make, Zapier, bots de WhatsApp, Telegram, scrapers, automatización de procesos\n5. **Datos y análisis**: dashboards, BI, análisis de datos, ETL, bases de datos, reporting\n\n### RECHAZAMOS (should_apply: false):\n- Diseño gráfico puro (logos, branding sin web)\n- Traducción / redacción de contenidos sin componente técnico\n- Contabilidad, legal, marketing puro (sin automatización)\n- Presencia física obligatoria\n- Proyectos con más de 50 propuestas enviadas\n- Cualquier cosa fuera de las 5 categorías de arriba\n\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\n- Tono: FORMAL / CASUAL / URGENTE\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\n\n## PASO 2: DOLOR REAL\nIdentifica el problema de negocio DETRÁS de lo técnico.\n\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\n\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\n- TÉCNICO/NEGOCIO: Restatea su problema con observación experta\n- NOVATO/URGENTE: Hazles sentir que ya tienes la solución\n\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\n\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\n\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\n\n## PASO 4: PREGUNTAS (1-2 máximo)\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\n\n## PRESUPUESTO — PRECIO JUSTO (ignorar el rango del proyecto)\nIMPORTANTE: Ignora completamente el presupuesto que indica el cliente. Nosotros ponemos nuestro precio JUSTO basado en la complejidad REAL del proyecto.\n\nUsamos Claude Code para desarrollo rápido, lo que nos permite ser competitivos sin sacrificar calidad.\n\nReglas de precio:\n- Si el proyecto es POR HORA: siempre 40 EUR/hora\n- Páginas web / landing pages / WordPress: 150-400 EUR (con Claude Code las hacemos muy rápido)\n- E-commerce / tienda online: 400-1200 EUR\n- Chatbot básico (sin IA): 350-600 EUR\n- Chatbot con IA / Agente conversacional: 700-1500 EUR\n- Automatización (n8n, Make, Zapier): 400-1000 EUR\n- Agente IA complejo / RAG / NLP: 1200-2500 EUR\n- Software/SaaS/Plataforma: 1500-4000 EUR\n- Web scraping / ETL: 300-800 EUR\n- Dashboard/BI/Reporting: 600-1500 EUR\n- Integración de APIs: 300-900 EUR\n- App web full-stack: 1000-3500 EUR\n- Otros técnicos: estima según complejidad real, mínimo 150 EUR\n\nIMPORTANTE: Sumar siempre +20% por comisión de Workana al budget_suggested.\nNO menciones precio en la propuesta (se negocia en llamada).\nEl budget_suggested es lo que le cobramos AL CLIENTE (ya con margen Workana incluido).\n\n## ANTI-PATRONES\n- NO empezar con 'Hola, soy Alex y tengo X años...'\n- NO primera frase genérica\n- NO prometer plazos sin saber alcance\n- NO listar tecnologías sin beneficio\n- NO usar 'podría', 'creo que', 'quizás'\n- NO usar 'Quedo a tu disposición'\n- NO más de 200 palabras\n- NO más de 2 preguntas\n- NO mencionar precio\n\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\n- Sistema Integral de Logística y Envíos para E-commerce\n- Asistente Virtual Inteligente Multicanal 24/7\n- Automatización de Marketing de Contenidos\n- Chatbot Inteligente en WhatsApp con IA para Automatización\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\n\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\n\n---\n\nPROYECTO A ANALIZAR:\n\nTítulo: ${d.full_title || d.title}\nURL: ${d.url}\nDescripción: ${d.full_description || d.description}\nPresupuesto del cliente: ${d.budget_detail || d.budget_text || 'No especificado'} (IGNORAR - ponemos nuestro precio)\nSkills: ${(d.skills_detail || d.skills || []).join(', ')}\nPropuestas actuales: ${d.proposals_count || 'Desconocido'}\nCliente: ${d.client_name || 'Desconocido'} (${d.client_country || '?'})\nRating: ${d.client_rating || 'Sin rating'}\nVerificado: ${d.client_verified ? 'Sí' : 'No'}\nFecha publicación: ${d.publish_date || 'Desconocido'}\nCategoría: ${d.category || 'IT & Programación'}\n\nTexto completo de la página:\n${(d.full_text || '').substring(0, 3000)}`;\n\nreturn [{\n  json: {\n    ...d,\n    openai_body: {\n      model: 'gpt-4o',\n      temperature: 0.4,\n      max_tokens: 2000,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt }\n      ]\n    }\n  }\n}];\n"
+        "jsCode": "// Obtener stats de conversión históricas para enriquecer el prompt\nlet conversionStats = '';\ntry {\n  const statsResp = await fetch(\n    `${$input.first().json.config.SUPABASE_URL}/rest/v1/workana_conversion_stats`,\n    {\n      headers: {\n        'apikey': $input.first().json.config.SUPABASE_KEY,\n        'Authorization': `Bearer ${$input.first().json.config.SUPABASE_KEY}`,\n      }\n    }\n  );\n  const stats = await statsResp.json();\n  if (Array.isArray(stats) && stats.length > 0) {\n    conversionStats = '\\n## DATOS DE CONVERSIÓN HISTÓRICOS:\\n' +\n      stats.map(s => `- ${s.category}: ${s.response_rate_pct || 0}% tasa respuesta (${s.total_sent} enviadas)`).join('\\n') +\n      '\\nUsa estos datos para ajustar tu enfoque.';\n  }\n} catch (e) { /* no bloquear si la vista no existe aún */ }\n\n// Construir body para OpenAI - Selección focalizada + precio justo con Claude Code\nconst d = $input.first().json;\n\nconst systemPrompt = `Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\n{\n  \"relevance_score\": 0-100,\n  \"red_flags\": [\"flag1\", \"flag2\"],\n  \"should_apply\": true/false,\n  \"proposal_text\": \"texto de la propuesta listo para copiar\",\n  \"questions_text\": \"preguntas para el cliente (1-2 máximo)\",\n  \"budget_suggested\": número en EUR,\n  \"delivery_days\": número,\n  \"skills_recommended\": [\"skill1\", \"skill2\"],\n  \"portfolio_items\": [\"item1\", \"item2\"],\n  \"internal_notes\": {\n    \"perfil_detectado\": \"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\",\n    \"dolor_real\": \"descripción\",\n    \"por_que_yo\": \"razón específica\",\n    \"tiempo_estimado\": \"rango\",\n    \"razonamiento_precio\": \"cómo llegaste al precio\"\n  }\n}\n\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.`;\n\n// Detectar categoría y seleccionar template de énfasis\nconst allText = ((d.category || '') + ' ' + (d.full_title || d.title || '') + ' ' + (d.full_description || d.description || '')).toLowerCase();\n\nlet categoryEmphasis = '';\n\nif (/inteligencia artificial|machine learning|\\bai\\b|\\bml\\b|chatbot|nlp|gpt|openai|claude|rag|agente.*ia/i.test(allText)) {\n  categoryEmphasis = `\n## ÉNFASIS PARA PROYECTO DE IA:\n- Destaca ROI concreto (X% mejora en eficiencia, Y horas ahorradas)\n- Menciona casos de uso específicos implementados\n- Vocabulario técnico de IA pero explica beneficios de negocio\n- Enfatiza: modelo correcto para el caso, escalabilidad, integración\n- Portfolio prioritario: RAG, Asistente Virtual, Voice Bot`;\n} else if (/web|landing|wordpress|e-commerce|ecommerce|tienda|woocommerce|shopify|pagina|sitio|blog|portafolio/i.test(allText)) {\n  categoryEmphasis = `\n## ÉNFASIS PARA PROYECTO WEB:\n- Destaca velocidad de entrega (Claude Code permite entregar más rápido)\n- Menciona responsive, SEO, performance (Core Web Vitals)\n- Énfasis en diseño moderno y conversión (funcional, no solo bonito)\n- Si es e-commerce: integraciones de pago, inventario, analytics\n- Portfolio prioritario: Sistema Logística E-commerce`;\n} else if (/automatizaci[oó]n|automation|n8n|make|zapier|bot|whatsapp|telegram|scraper|scraping/i.test(allText)) {\n  categoryEmphasis = `\n## ÉNFASIS PARA PROYECTO DE AUTOMATIZACIÓN:\n- Destaca ahorro de tiempo en horas/semana con números concretos\n- Escalabilidad: lo que automatizas hoy sirve cuando crezcas 10x\n- Fiabilidad: monitoring, alertas, retry automático\n- Si es bot: NLP, integraciones, analytics de conversaciones\n- Portfolio prioritario: Automatización Flujos BPA, Chatbot WhatsApp, Web Scraping`;\n} else if (/software|saas|plataforma|dashboard|crm|erp|\\bapi\\b|backend|fullstack|full.stack|aplicaci[oó]n|\\bapp\\b/i.test(allText)) {\n  categoryEmphasis = `\n## ÉNFASIS PARA PROYECTO DE SOFTWARE:\n- Arquitectura limpia y mantenibilidad a largo plazo\n- Stack técnico específico que usarías\n- Testing, documentación, deployment automatizado\n- Escalabilidad técnica (DB, cache, microservicios si aplica)\n- Portfolio prioritario: Dashboard Ejecutivo BI, Sistema Logística`;\n} else if (/datos|data|\\bbi\\b|analytics|etl|reporting|dashboard|base.de.datos|database|\\bsql\\b/i.test(allText)) {\n  categoryEmphasis = `\n## ÉNFASIS PARA PROYECTO DE DATOS/BI:\n- Visualización clara y accionable (no solo gráficos bonitos)\n- Fuentes de datos que puedes integrar\n- Tiempo real vs batch, alertas automáticas, insights predictivos\n- Si es ETL: fiabilidad, monitoring, data quality\n- Portfolio prioritario: Dashboard Ejecutivo con Análisis Predictivo`;\n}\n\nconst userPrompt = `Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\n\n# INSTRUCCIONES DE GENERACIÓN\n\n## OBJETIVO\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\n\n## PASO 0: FILTRO DE VIABILIDAD — FOCALIZADO EN NUESTRAS ÁREAS\nAplicamos (should_apply: true) SOLO si el proyecto encaja en ALGUNA de estas categorías:\n\n### CATEGORÍAS QUE ACEPTAMOS:\n1. **Inteligencia Artificial / Machine Learning**: chatbots, agentes IA, RAG, NLP, automatización con IA, integración de APIs de IA (OpenAI, Claude, etc.)\n2. **Creación de páginas web**: landing pages, sitios corporativos, e-commerce, WordPress, Webflow, tiendas online, blogs, portafolios\n3. **Desarrollo de software**: aplicaciones web, SaaS, plataformas, dashboards, CRM, ERP, sistemas a medida, APIs, backends, frontends\n4. **Automatización y bots**: n8n, Make, Zapier, bots de WhatsApp, Telegram, scrapers, automatización de procesos\n5. **Datos y análisis**: dashboards, BI, análisis de datos, ETL, bases de datos, reporting\n\n### RECHAZAMOS (should_apply: false):\n- Diseño gráfico puro (logos, branding sin web)\n- Traducción / redacción de contenidos sin componente técnico\n- Contabilidad, legal, marketing puro (sin automatización)\n- Presencia física obligatoria\n- Proyectos con más de 50 propuestas enviadas\n- Cualquier cosa fuera de las 5 categorías de arriba\n\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\n- Tono: FORMAL / CASUAL / URGENTE\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\n\n## PASO 2: DOLOR REAL\nIdentifica el problema de negocio DETRÁS de lo técnico.\n\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\n\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\n- TÉCNICO/NEGOCIO: Restatea su problema con observación experta\n- NOVATO/URGENTE: Hazles sentir que ya tienes la solución\n\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\n\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\n\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\n\n## PASO 4: PREGUNTAS (1-2 máximo)\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\n\n## PRESUPUESTO — PRECIO JUSTO (ignorar el rango del proyecto)\nIMPORTANTE: Ignora completamente el presupuesto que indica el cliente. Nosotros ponemos nuestro precio JUSTO basado en la complejidad REAL del proyecto.\n\nUsamos Claude Code para desarrollo rápido, lo que nos permite ser competitivos sin sacrificar calidad.\n\nReglas de precio:\n- Si el proyecto es POR HORA: siempre 40 EUR/hora\n- Páginas web / landing pages / WordPress: 150-400 EUR (con Claude Code las hacemos muy rápido)\n- E-commerce / tienda online: 400-1200 EUR\n- Chatbot básico (sin IA): 350-600 EUR\n- Chatbot con IA / Agente conversacional: 700-1500 EUR\n- Automatización (n8n, Make, Zapier): 400-1000 EUR\n- Agente IA complejo / RAG / NLP: 1200-2500 EUR\n- Software/SaaS/Plataforma: 1500-4000 EUR\n- Web scraping / ETL: 300-800 EUR\n- Dashboard/BI/Reporting: 600-1500 EUR\n- Integración de APIs: 300-900 EUR\n- App web full-stack: 1000-3500 EUR\n- Otros técnicos: estima según complejidad real, mínimo 150 EUR\n\nIMPORTANTE: Sumar siempre +20% por comisión de Workana al budget_suggested.\nNO menciones precio en la propuesta (se negocia en llamada).\nEl budget_suggested es lo que le cobramos AL CLIENTE (ya con margen Workana incluido).\n\n${categoryEmphasis}\n\n## ANTI-PATRONES\n- NO empezar con 'Hola, soy Alex y tengo X años...'\n- NO primera frase genérica\n- NO prometer plazos sin saber alcance\n- NO listar tecnologías sin beneficio\n- NO usar 'podría', 'creo que', 'quizás'\n- NO usar 'Quedo a tu disposición'\n- NO más de 200 palabras\n- NO más de 2 preguntas\n- NO mencionar precio\n\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\n- Sistema Integral de Logística y Envíos para E-commerce\n- Asistente Virtual Inteligente Multicanal 24/7\n- Automatización de Marketing de Contenidos\n- Chatbot Inteligente en WhatsApp con IA para Automatización\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\n\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\n\n---\n\n${conversionStats}\n\n---\n\nPROYECTO A ANALIZAR:\n\nTítulo: ${d.full_title || d.title}\nURL: ${d.url}\nDescripción: ${d.full_description || d.description}\nPresupuesto del cliente: ${d.budget_detail || d.budget_text || 'No especificado'} (IGNORAR - ponemos nuestro precio)\nSkills: ${(d.skills_detail || d.skills || []).join(', ')}\nPropuestas actuales: ${d.proposals_count || 'Desconocido'}\nCliente: ${d.client_name || 'Desconocido'} (${d.client_country || '?'})\nRating: ${d.client_rating || 'Sin rating'}\nVerificado: ${d.client_verified ? 'Sí' : 'No'}\nFecha publicación: ${d.publish_date || 'Desconocido'}\nPre-Score del sistema: ${d.pre_score || 50}/100 (frescura + competencia + verificación cliente)\nCategoría: ${d.category || 'IT & Programación'}\n\nTexto completo de la página:\n${(d.full_text || '').substring(0, 3000)}`;\n\nreturn [{\n  json: {\n    ...d,\n    openai_body: {\n      model: 'gpt-4o',\n      temperature: 0.4,\n      max_tokens: 2000,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt }\n      ]\n    }\n  }\n}];\n"
       },
       "id": "prepare-prompt",
       "name": "Preparar Prompt IA",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1870,
+        2370,
         0
       ]
     },
@@ -181,7 +181,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2090,
+        2590,
         0
       ],
       "retryOnFail": true,
@@ -203,7 +203,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2310,
+        2810,
         0
       ]
     },
@@ -241,7 +241,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2530,
+        3030,
         0
       ]
     },
@@ -254,7 +254,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2970,
+        3470,
         0
       ]
     },
@@ -292,7 +292,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3190,
+        3690,
         0
       ]
     },
@@ -332,7 +332,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        3410,
+        3910,
         0
       ]
     },
@@ -358,7 +358,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3630,
+        4130,
         -150
       ],
       "retryOnFail": true,
@@ -367,14 +367,14 @@
     },
     {
       "parameters": {
-        "jsCode": "// Actualizar estado después del envío automático\nconst submitResult = $input.first().json;\nconst proposalData = $('Preparar Propuesta').item.json;\n\nconst success = submitResult.success === true;\n\nreturn [{\n  json: {\n    id: proposalData.project_id,\n    success,\n    project_url: proposalData.project.workana_url,\n    project_title: proposalData.project.title,\n    proposal_text: proposalData.proposal_text,\n    budget: proposalData.budget_suggested,\n    relevance: proposalData.project.relevance_score,\n    message: submitResult.message || (success ? 'Enviado' : 'Error'),\n    auto_sent: true,\n    config: proposalData.config,\n    project_id: proposalData.project_id,\n  }\n}];"
+        "jsCode": "// Actualizar estado después del envío automático\n// Si falla: insertar en retry queue para reintento posterior\nconst submitResult = $input.first().json;\nconst proposalData = $('Preparar Propuesta').item.json;\n\nconst success = submitResult.success === true;\n\n// Si falló, insertar en cola de reintentos\nif (!success) {\n  try {\n    const retryBody = {\n      project_id: proposalData.project_id,\n      project_url: proposalData.project.workana_url,\n      proposal_text: proposalData.proposal_text,\n      budget_suggested: proposalData.budget_suggested,\n      delivery_days: proposalData.delivery_days,\n      attempt_count: 1,\n      next_retry_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),\n      error_message: submitResult.message || submitResult.error || 'Unknown error',\n    };\n    await fetch(\n      `${proposalData.config.SUPABASE_URL}/rest/v1/workana_retry_queue`,\n      {\n        method: 'POST',\n        headers: {\n          'apikey': proposalData.config.SUPABASE_KEY,\n          'Authorization': `Bearer ${proposalData.config.SUPABASE_KEY}`,\n          'Content-Type': 'application/json',\n        },\n        body: JSON.stringify(retryBody),\n      }\n    );\n    console.log('📋 Insertado en retry queue: ' + proposalData.project.workana_url);\n  } catch (e) {\n    console.error('Error insertando en retry queue:', e.message);\n  }\n}\n\nreturn [{\n  json: {\n    id: proposalData.project_id,\n    success,\n    project_url: proposalData.project.workana_url,\n    project_title: proposalData.project.title,\n    proposal_text: proposalData.proposal_text,\n    budget: proposalData.budget_suggested,\n    relevance: proposalData.project.relevance_score,\n    message: submitResult.message || (success ? 'Enviado' : 'Error - en cola de reintentos'),\n    auto_sent: true,\n    config: proposalData.config,\n    project_id: proposalData.project_id,\n  }\n}];"
       },
       "id": "process-auto-result",
       "name": "Resultado Auto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3850,
+        4350,
         -150
       ]
     },
@@ -412,7 +412,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4070,
+        4570,
         -150
       ]
     },
@@ -425,7 +425,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3630,
+        4130,
         150
       ]
     },
@@ -438,7 +438,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4290,
+        4790,
         0
       ]
     },
@@ -466,7 +466,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4510,
+        5010,
         0
       ],
       "credentials": {
@@ -506,15 +506,15 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4730,
+        5230,
         0
       ]
     },
     {
       "parameters": {
-        "content": "## 🤖 WORKANA AUTOPILOT v3\n\n### Flujo:\n1. Cada 30 min → verifica horario + cuota semanal\n2. Cuota: 50-60 propuestas/semana (aleatorio)\n3. Horarios aleatorios (probabilístico)\n4. Scrape → IA filtra (IA, web, software) → genera propuesta\n5. Precio justo con Claude Code (ignora rango del cliente)\n6. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n7. Siempre notifica por WhatsApp\n\n### Credenciales (2):\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API (apikey)\n\n### Anti-ban:\n- 50-60 propuestas/semana (no diarias)\n- Horarios aleatorios dentro de L-S 8-22h\n- Skip probabilístico por ejecución",
+        "content": "## 🤖 WORKANA AUTOPILOT v3\n\n### Flujo:\n1. Cada 30 min → cuota semanal + session check\n2. Cuota: 50-60 propuestas/semana (aleatorio)\n3. Horarios aleatorios + prioridad a proyectos frescos\n4. Multi-categoría (4 categorías)\n5. Pre-Score + IA filtra + templates por categoría\n6. Precio justo con Claude Code\n7. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n8. Retry queue para fallos de envío\n9. WhatsApp: notificaciones + resumen diario\n\n### Credenciales (2):\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API (apikey)\n\n### Anti-ban:\n- 50-60 propuestas/semana (no diarias)\n- Horarios aleatorios dentro de L-S 8-22h\n- Skip probabilístico + prioridad frescos\n- Session health check automático",
         "width": 380,
-        "height": 520
+        "height": 580
       },
       "id": "sticky-info",
       "name": "Info",
@@ -552,7 +552,146 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        2640,
+        3140,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.PUPPETEER_URL}}/session-check"
+      },
+      "id": "session-check-node",
+      "name": "Verificar Sesión",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        550,
+        0
+      ],
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "session-ok-check",
+              "leftValue": "={{$json.loggedIn}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "session-ok",
+      "name": "¿Sesión OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Control Cuota y Horario').item.json.PUPPETEER_URL}}/login"
+      },
+      "id": "auto-relogin",
+      "name": "Intentar Re-Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "login-ok-check",
+              "leftValue": "={{$json.success}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "login-ok",
+      "name": "¿Login OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$('Control Cuota y Horario').item.json.EVOLUTION_URL}}/message/sendText/{{$('Control Cuota y Horario').item.json.EVOLUTION_INSTANCE}}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{$('Control Cuota y Horario').item.json.WHATSAPP_NUMBER}}@s.whatsapp.net\",\n  \"text\": \"🚨 *ALERTA: SESIÓN DE WORKANA CAÍDA*\\n\\nEl auto-login ha fallado. El workflow está PARADO.\\n\\nAcciones necesarias:\\n1. Ir a Workana y hacer login manual\\n2. O reiniciar el servicio Puppeteer\\n\\nTimestamp: {{$('Control Cuota y Horario').item.json.timestamp}}\"\n}"
+      },
+      "id": "alert-session-dead",
+      "name": "Alerta Sesión Muerta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1150,
+        400
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Evolution API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calcular Pre-Score del proyecto antes de enviar a la IA\nconst d = $input.first().json;\n\nlet score = 50; // Base\n\n// Factor 1: Frescura (basado en texto de fecha de publicación)\nconst publishDate = (d.publish_date || '').toLowerCase();\nconst hoursMatch = publishDate.match(/(\\d+)\\s*(hora|hour)/i);\nconst minsMatch = publishDate.match(/(\\d+)\\s*(minuto|minute|min)/i);\nif (minsMatch || publishDate.includes('momento') || publishDate.includes('just')) {\n  score += 20; // Menos de 1 hora\n} else if (hoursMatch) {\n  const hours = parseInt(hoursMatch[1]);\n  if (hours <= 2) score += 20;\n  else if (hours <= 6) score += 10;\n  else if (hours <= 12) score += 5;\n}\n\n// Factor 2: Competencia baja\nconst proposals = d.proposals_count || 0;\nif (proposals <= 5) score += 15;\nelse if (proposals <= 10) score += 10;\nelse if (proposals <= 20) score += 5;\n\n// Factor 3: Cliente verificado\nif (d.client_verified === true) score += 10;\n\n// Factor 4: Rating alto\nconst rating = parseFloat(d.client_rating) || 0;\nif (rating >= 4.5) score += 5;\n\n// Factor 5: Presupuesto definido\nconst budget = (d.budget_detail || d.budget_text || '').toLowerCase();\nif (budget && !budget.includes('a definir') && !budget.includes('open') && !budget.includes('abierto')) {\n  score += 5;\n}\n\nscore = Math.min(100, score);\n\nconsole.log(`Pre-Score: ${score} | ${d.title || d.full_title} | Props: ${proposals} | Verified: ${d.client_verified}`);\n\nreturn [{\n  json: {\n    ...d,\n    pre_score: score,\n  }\n}];"
+      },
+      "id": "calc-prescore",
+      "name": "Calcular Pre-Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2370,
         0
       ]
     }
@@ -628,7 +767,7 @@
       "main": [
         [
           {
-            "node": "Preparar Prompt IA",
+            "node": "Calcular Pre-Score",
             "type": "main",
             "index": 0
           }
@@ -801,7 +940,81 @@
       "main": [
         [
           {
+            "node": "Verificar Sesión",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Sesión": {
+      "main": [
+        [
+          {
+            "node": "¿Sesión OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Sesión OK?": {
+      "main": [
+        [
+          {
             "node": "Scrape Workana",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Intentar Re-Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intentar Re-Login": {
+      "main": [
+        [
+          {
+            "node": "¿Login OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Login OK?": {
+      "main": [
+        [
+          {
+            "node": "Scrape Workana",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alerta Sesión Muerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerta Sesión Muerta": {
+      "main": [
+        []
+      ]
+    },
+    "Calcular Pre-Score": {
+      "main": [
+        [
+          {
+            "node": "Preparar Prompt IA",
             "type": "main",
             "index": 0
           }

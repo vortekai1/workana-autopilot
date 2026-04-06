@@ -166,6 +166,17 @@ app.get('/debug-html', async (req, res) => {
   }
 });
 
+// Scrape mis propuestas enviadas (para feedback loop)
+app.get('/my-proposals', async (req, res) => {
+  try {
+    const { page = 1 } = req.query;
+    const result = await scraper.scrapeMyProposals(parseInt(page));
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ============================================
 // ARRANQUE
 // ============================================

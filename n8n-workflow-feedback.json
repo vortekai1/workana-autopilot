@@ -1,0 +1,115 @@
+{
+  "name": "Workana Feedback Loop",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-6"
+            }
+          ]
+        }
+      },
+      "id": "feedback-trigger",
+      "name": "Cada día 9:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n  }\n}];"
+      },
+      "id": "feedback-config",
+      "name": "CONFIG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.PUPPETEER_URL}}/my-proposals?page=1"
+      },
+      "id": "feedback-scrape",
+      "name": "Scrape Mis Propuestas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('CONFIG').item.json;\nconst data = $input.first().json;\n\nif (!data.success || !Array.isArray(data.proposals)) {\n  console.log('No se pudieron obtener propuestas:', data.error || 'unknown');\n  return [];\n}\n\nconst headers = {\n  'apikey': config.SUPABASE_KEY,\n  'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n  'Content-Type': 'application/json',\n};\n\nlet updated = 0;\nfor (const p of data.proposals) {\n  if (!p.project_url) continue;\n\n  const body = {\n    client_responded: p.client_responded || false,\n  };\n\n  // Solo actualizar outcome si no es 'in_progress' (no sobreescribir won/lost)\n  if (p.outcome && p.outcome !== 'in_progress') {\n    body.outcome = p.outcome;\n    if (p.outcome === 'won') body.status = 'won';\n    else if (p.outcome === 'lost') body.status = 'lost';\n  }\n\n  try {\n    await fetch(\n      `${config.SUPABASE_URL}/rest/v1/workana_projects?workana_url=eq.${encodeURIComponent(p.project_url)}`,\n      { method: 'PATCH', headers, body: JSON.stringify(body) }\n    );\n    updated++;\n  } catch (e) {\n    console.error('Error actualizando:', p.project_url, e.message);\n  }\n}\n\nconsole.log(`Actualizados ${updated}/${data.proposals.length} proyectos`);\nreturn [{ json: { updated, total: data.proposals.length } }];"
+      },
+      "id": "feedback-update",
+      "name": "Actualizar DB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Cada día 9:00": {
+      "main": [
+        [
+          {
+            "node": "CONFIG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CONFIG": {
+      "main": [
+        [
+          {
+            "node": "Scrape Mis Propuestas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Mis Propuestas": {
+      "main": [
+        [
+          {
+            "node": "Actualizar DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": [
+    {
+      "name": "workana"
+    },
+    {
+      "name": "feedback-loop"
+    }
+  ]
+}

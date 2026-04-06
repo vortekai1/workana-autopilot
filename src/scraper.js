@@ -255,6 +255,84 @@ class WorkanaScraper {
     }
   }
 
+  // Scrape mis propuestas enviadas (para feedback loop)
+  async scrapeMyProposals(pageNum = 1) {
+    const page = await this.bm.newPage();
+
+    try {
+      const url = `https://www.workana.com/worker/proposals?page=${pageNum}`;
+      console.log(`[Scraper] Navegando a mis propuestas: ${url}`);
+
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.bm.randomDelay(2000, 4000);
+      await this._gradualScroll(page);
+
+      const proposals = await page.evaluate(() => {
+        const items = [];
+        const seen = new Set();
+
+        // Buscar enlaces a proyectos
+        const links = document.querySelectorAll('a[href*="/job/"]');
+
+        links.forEach(link => {
+          const href = (link.href || '').split('?')[0];
+          if (seen.has(href) || !href.includes('/job/')) return;
+          seen.add(href);
+
+          const container = link.closest('tr, div[class], li, article, section');
+          if (!container) return;
+
+          const statusEl = container.querySelector(
+            '[class*="status"], .badge, .label, [class*="state"]'
+          );
+
+          items.push({
+            project_url: href,
+            project_title: link.textContent?.trim() || '',
+            status_text: statusEl?.textContent?.trim() || '',
+            container_text: container.textContent?.trim().substring(0, 500) || '',
+          });
+        });
+
+        return items;
+      });
+
+      // Clasificar estados
+      const classified = proposals.map(p => {
+        const text = (p.status_text + ' ' + p.container_text).toLowerCase();
+        let outcome = 'in_progress';
+        let clientResponded = false;
+
+        if (/ganado|won|aceptad|accepted|contratad|hired/i.test(text)) {
+          outcome = 'won';
+          clientResponded = true;
+        } else if (/rechazad|rejected|perdid|lost|no seleccion|not selected/i.test(text)) {
+          outcome = 'lost';
+          clientResponded = true;
+        } else if (/visto|seen|le[ií]d|read|respuesta|replied|message/i.test(text)) {
+          clientResponded = true;
+        } else if (/cerrado|closed|expirad|expired|finaliz/i.test(text)) {
+          outcome = 'no_response';
+        }
+
+        return {
+          project_url: p.project_url,
+          project_title: p.project_title,
+          outcome,
+          client_responded: clientResponded,
+        };
+      });
+
+      console.log(`[Scraper] ${classified.length} propuestas encontradas`);
+      return { success: true, proposals: classified, total: classified.length };
+    } catch (error) {
+      console.error(`[Scraper] Error mis propuestas: ${error.message}`);
+      return { success: false, proposals: [], error: error.message };
+    } finally {
+      await page.close();
+    }
+  }
+
   // Scroll gradual para activar lazy loading
   async _gradualScroll(page) {
     await page.evaluate(async () => {
