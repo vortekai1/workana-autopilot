@@ -26,11 +26,19 @@ let submitter;
 // ENDPOINTS
 // ============================================
 
-// Health check
+// Health check enriquecido
 app.get('/health', async (req, res) => {
   const isAlive = browserManager?.isRunning() || false;
   const isLoggedIn = browserManager?.loggedIn || false;
-  res.json({ status: 'ok', browser: isAlive, loggedIn: isLoggedIn });
+  const mem = process.memoryUsage();
+  res.json({
+    status: 'ok',
+    browser: isAlive,
+    loggedIn: isLoggedIn,
+    uptime_hours: Math.round(process.uptime() / 3600 * 10) / 10,
+    memory_mb: Math.round(mem.heapUsed / 1024 / 1024),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Login manual (también se hace al arrancar)
@@ -175,11 +183,11 @@ app.get('/debug-html', async (req, res) => {
   }
 });
 
-// Scrape mis propuestas enviadas (para feedback loop)
+// Scrape mis propuestas enviadas (para feedback loop) — multi-página
 app.get('/my-proposals', async (req, res) => {
   try {
-    const { page = 1 } = req.query;
-    const result = await scraper.scrapeMyProposals(parseInt(page));
+    const { page = 1, maxPages = 3 } = req.query;
+    const result = await scraper.scrapeMyProposals(parseInt(page), parseInt(maxPages));
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

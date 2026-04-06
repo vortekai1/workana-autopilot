@@ -49,20 +49,31 @@ class BrowserManager {
   async newPage() {
     const page = await this.browser.newPage();
 
-    // User agent realista
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-    );
+    // Pool de User Agents reales — rota por día (no por petición, sería sospechoso)
+    const userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ];
+    const dayIndex = new Date().getDate() % userAgents.length;
+    await page.setUserAgent(userAgents[dayIndex]);
 
-    // Idioma español
-    await page.setExtraHTTPHeaders({ 'Accept-Language': 'es-ES,es;q=0.9' });
+    const langs = ['es-ES,es;q=0.9', 'es-ES,es;q=0.9,en;q=0.8', 'es;q=0.9'];
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': langs[dayIndex % langs.length],
+    });
 
     return page;
   }
 
   // Delay aleatorio simulando comportamiento humano
+  // Por la noche más lento (simula fatiga natural)
   randomDelay(min = 1000, max = 3000) {
-    const ms = Math.floor(Math.random() * (max - min) + min);
+    const hour = new Date().getHours();
+    const fatigue = hour >= 20 ? 1.5 : hour >= 17 ? 1.2 : 1.0;
+    const ms = Math.floor((Math.random() * (max - min) + min) * fatigue);
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 

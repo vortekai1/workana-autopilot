@@ -1,5 +1,5 @@
 import {
-  Send, Target, MessageCircle, Trophy, DollarSign, RotateCcw,
+  Send, Target, MessageCircle, Trophy, DollarSign, RotateCcw, TrendingUp, Clock,
 } from 'lucide-react'
 import { formatCurrency } from '../utils/formatters'
 
@@ -38,6 +38,18 @@ export default function KPICards({ stats }) {
       subtitle: 'este mes',
     },
     {
+      title: 'Win Rate',
+      value: `${stats.winRate || 0}%`,
+      icon: TrendingUp,
+      color: 'text-emerald-600 bg-emerald-100 dark:text-emerald-400 dark:bg-emerald-900/50',
+    },
+    {
+      title: 'Resp. Media',
+      value: stats.avgResponseTime ? `${stats.avgResponseTime}h` : '—',
+      icon: Clock,
+      color: 'text-cyan-600 bg-cyan-100 dark:text-cyan-400 dark:bg-cyan-900/50',
+    },
+    {
       title: 'Retry Queue',
       value: stats.retryPending,
       icon: RotateCcw,
@@ -48,7 +60,7 @@ export default function KPICards({ stats }) {
   ]
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
       {cards.map((card) => (
         <div
           key={card.title}

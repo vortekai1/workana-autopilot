@@ -226,6 +226,21 @@ class WorkanaScraper {
         // Fecha de publicación
         const publishDate = getText('time', '.published-date', '[class*="publish"]');
 
+        // Proyectos publicados por el cliente
+        const clientProjectsText = getText(
+          '.client-projects', '.employer-projects',
+          '[class*="projects-posted"]', '[class*="jobs-posted"]'
+        );
+        const clientProjectsMatch = clientProjectsText.match(/(\d+)/);
+        const clientProjectsPosted = clientProjectsMatch ? parseInt(clientProjectsMatch[1]) : null;
+
+        // Tasa de contratación del cliente
+        const hireRateText = getText(
+          '.hire-rate', '[class*="hire"]', '[class*="contratacion"]'
+        );
+        const hireRateMatch = hireRateText.match(/(\d+)/);
+        const clientHireRate = hireRateMatch ? parseInt(hireRateMatch[1]) : null;
+
         return {
           title,
           description,
@@ -240,6 +255,8 @@ class WorkanaScraper {
             country: clientCountry,
             rating: clientRating,
             verified: clientVerified,
+            projects_posted: clientProjectsPosted,
+            hire_rate: clientHireRate,
           },
           // Texto completo de la página (para que la IA tenga contexto máximo)
           full_text: document.body?.innerText?.substring(0, 5000) || '',
@@ -255,82 +272,92 @@ class WorkanaScraper {
     }
   }
 
-  // Scrape mis propuestas enviadas (para feedback loop)
-  async scrapeMyProposals(pageNum = 1) {
-    const page = await this.bm.newPage();
+  // Scrape mis propuestas enviadas (para feedback loop) — multi-página
+  async scrapeMyProposals(pageNum = 1, maxPages = 3) {
+    const allProposals = [];
 
-    try {
-      const url = `https://www.workana.com/worker/proposals?page=${pageNum}`;
-      console.log(`[Scraper] Navegando a mis propuestas: ${url}`);
+    for (let p = pageNum; p < pageNum + maxPages; p++) {
+      const page = await this.bm.newPage();
 
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-      await this.bm.randomDelay(2000, 4000);
-      await this._gradualScroll(page);
+      try {
+        const url = `https://www.workana.com/worker/proposals?page=${p}`;
+        console.log(`[Scraper] Navegando a mis propuestas: ${url}`);
 
-      const proposals = await page.evaluate(() => {
-        const items = [];
-        const seen = new Set();
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        await this.bm.randomDelay(2000, 4000);
+        await this._gradualScroll(page);
 
-        // Buscar enlaces a proyectos
-        const links = document.querySelectorAll('a[href*="/job/"]');
+        const proposals = await page.evaluate(() => {
+          const items = [];
+          const seen = new Set();
 
-        links.forEach(link => {
-          const href = (link.href || '').split('?')[0];
-          if (seen.has(href) || !href.includes('/job/')) return;
-          seen.add(href);
+          const links = document.querySelectorAll('a[href*="/job/"]');
 
-          const container = link.closest('tr, div[class], li, article, section');
-          if (!container) return;
+          links.forEach(link => {
+            const href = (link.href || '').split('?')[0];
+            if (seen.has(href) || !href.includes('/job/')) return;
+            seen.add(href);
 
-          const statusEl = container.querySelector(
-            '[class*="status"], .badge, .label, [class*="state"]'
-          );
+            const container = link.closest('tr, div[class], li, article, section');
+            if (!container) return;
 
-          items.push({
-            project_url: href,
-            project_title: link.textContent?.trim() || '',
-            status_text: statusEl?.textContent?.trim() || '',
-            container_text: container.textContent?.trim().substring(0, 500) || '',
+            const statusEl = container.querySelector(
+              '[class*="status"], .badge, .label, [class*="state"]'
+            );
+
+            items.push({
+              project_url: href,
+              project_title: link.textContent?.trim() || '',
+              status_text: statusEl?.textContent?.trim() || '',
+              container_text: container.textContent?.trim().substring(0, 500) || '',
+            });
           });
+
+          return items;
         });
 
-        return items;
-      });
+        // Clasificar estados
+        const classified = proposals.map(pr => {
+          const text = (pr.status_text + ' ' + pr.container_text).toLowerCase();
+          let outcome = 'in_progress';
+          let clientResponded = false;
 
-      // Clasificar estados
-      const classified = proposals.map(p => {
-        const text = (p.status_text + ' ' + p.container_text).toLowerCase();
-        let outcome = 'in_progress';
-        let clientResponded = false;
+          if (/ganado|won|aceptad|accepted|contratad|hired/i.test(text)) {
+            outcome = 'won';
+            clientResponded = true;
+          } else if (/rechazad|rejected|perdid|lost|no seleccion|not selected/i.test(text)) {
+            outcome = 'lost';
+            clientResponded = true;
+          } else if (/visto|seen|le[ií]d|read|respuesta|replied|message/i.test(text)) {
+            clientResponded = true;
+          } else if (/cerrado|closed|expirad|expired|finaliz/i.test(text)) {
+            outcome = 'no_response';
+          }
 
-        if (/ganado|won|aceptad|accepted|contratad|hired/i.test(text)) {
-          outcome = 'won';
-          clientResponded = true;
-        } else if (/rechazad|rejected|perdid|lost|no seleccion|not selected/i.test(text)) {
-          outcome = 'lost';
-          clientResponded = true;
-        } else if (/visto|seen|le[ií]d|read|respuesta|replied|message/i.test(text)) {
-          clientResponded = true;
-        } else if (/cerrado|closed|expirad|expired|finaliz/i.test(text)) {
-          outcome = 'no_response';
-        }
+          return {
+            project_url: pr.project_url,
+            project_title: pr.project_title,
+            outcome,
+            client_responded: clientResponded,
+          };
+        });
 
-        return {
-          project_url: p.project_url,
-          project_title: p.project_title,
-          outcome,
-          client_responded: clientResponded,
-        };
-      });
+        allProposals.push(...classified);
 
-      console.log(`[Scraper] ${classified.length} propuestas encontradas`);
-      return { success: true, proposals: classified, total: classified.length };
-    } catch (error) {
-      console.error(`[Scraper] Error mis propuestas: ${error.message}`);
-      return { success: false, proposals: [], error: error.message };
-    } finally {
-      await page.close();
+        // Si hay menos de 10, probablemente es la última página
+        if (proposals.length < 10) break;
+
+        await this.bm.randomDelay(3000, 5000);
+      } catch (error) {
+        console.error(`[Scraper] Error mis propuestas p.${p}: ${error.message}`);
+        break;
+      } finally {
+        await page.close();
+      }
     }
+
+    console.log(`[Scraper] ${allProposals.length} propuestas encontradas (${maxPages} páginas)`);
+    return { success: true, proposals: allProposals, total: allProposals.length };
   }
 
   // Scroll gradual para activar lazy loading
