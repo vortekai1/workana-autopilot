@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ============================================\n// CONFIGURACIÓN CENTRAL - Edita los valores aquí\n// ============================================\nreturn [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34628706539',\n    SEARCH_CATEGORIES: 'it-programming',\n    SEARCH_PAGES: '2',\n    MIN_RELEVANCE_AUTO: '80',\n    MAX_PROPOSALS_DAY: '35',\n    MAX_PROPOSALS_ON_PROJECT: '30',\n    AUTO_MODE: false,\n  }\n}];"
+        "jsCode": "// ============================================\n// CONFIGURACIÓN CENTRAL - Edita los valores aquí\n// ============================================\nreturn [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34628706539',\n    SEARCH_CATEGORIES: 'it-programming',\n    SEARCH_PAGES: '2',\n    MIN_RELEVANCE_AUTO: '80',\n    MAX_PROPOSALS_WEEK_MIN: 50,\n    MAX_PROPOSALS_WEEK_MAX: 60,\n    MAX_PROPOSALS_ON_PROJECT: '50',\n    AUTO_MODE: false,\n  }\n}];"
       },
       "id": "config",
       "name": "CONFIG",
@@ -38,10 +38,10 @@
     },
     {
       "parameters": {
-        "jsCode": "// Verificar horario activo (8:00-22:00 Europe/Madrid)\nconst now = new Date();\nconst madridTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst hour = madridTime.getHours();\nconst day = madridTime.getDay(); // 0=domingo\n\nif (hour < 8 || hour >= 22 || day === 0) {\n  // Fuera de horario - no ejecutar\n  return [];\n}\n\n// Pasar la config adelante\nreturn [{\n  json: {\n    ...$input.first().json,\n    current_hour: hour,\n    current_day: day,\n    timestamp: now.toISOString()\n  }\n}];"
+        "jsCode": "// Control inteligente: horario + cuota semanal + aleatorización\n// -------------------------------------------------------\n// 1. Solo ejecuta en horario laboral (L-S, 8:00-22:00 Madrid)\n// 2. Consulta Supabase para contar propuestas enviadas esta semana\n// 3. Genera un objetivo semanal aleatorio (50-60) determinista por semana\n// 4. Calcula la probabilidad de ejecutar AHORA según lo que falta\n// 5. Lanza un dado: si no toca, devuelve [] y el workflow para\n// -------------------------------------------------------\n\nconst config = $input.first().json;\nconst now = new Date();\nconst madridTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst hour = madridTime.getHours();\nconst day = madridTime.getDay(); // 0=domingo\n\n// ─── 1. Horario laboral ───\nif (hour < 8 || hour >= 22 || day === 0) {\n  return []; // Fuera de horario\n}\n\n// ─── 2. Objetivo semanal determinista ───\n// Seed basado en año+semana → mismo objetivo toda la semana\nfunction seededRandom(seed) {\n  const x = Math.sin(seed * 9999) * 10000;\n  return x - Math.floor(x);\n}\nconst oneJan = new Date(madridTime.getFullYear(), 0, 1);\nconst weekNumber = Math.ceil(((madridTime - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);\nconst weekSeed = madridTime.getFullYear() * 100 + weekNumber;\nconst minWeek = config.MAX_PROPOSALS_WEEK_MIN || 50;\nconst maxWeek = config.MAX_PROPOSALS_WEEK_MAX || 60;\nconst weeklyTarget = Math.floor(minWeek + seededRandom(weekSeed) * (maxWeek - minWeek + 1));\n\n// ─── 3. Contar propuestas esta semana (lunes a ahora) ───\nconst startOfWeek = new Date(madridTime);\nconst dayOfWeek = startOfWeek.getDay() === 0 ? 7 : startOfWeek.getDay(); // ISO: lunes=1\nstartOfWeek.setDate(startOfWeek.getDate() - (dayOfWeek - 1));\nstartOfWeek.setHours(0, 0, 0, 0);\nconst startISO = startOfWeek.toISOString();\n\nlet proposalsThisWeek = 0;\ntry {\n  const resp = await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_proposals?select=id&created_at=gte.${startISO}`,\n    {\n      headers: {\n        'apikey': config.SUPABASE_KEY,\n        'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n      }\n    }\n  );\n  const proposals = await resp.json();\n  proposalsThisWeek = Array.isArray(proposals) ? proposals.length : 0;\n} catch (error) {\n  console.error('Error consultando cuota semanal:', error.message);\n  // Si falla la consulta, continuar para no bloquear\n}\n\n// ─── 4. ¿Ya alcanzamos la cuota? ───\nconst remaining = weeklyTarget - proposalsThisWeek;\nif (remaining <= 0) {\n  console.log(`⛔ Cuota semanal alcanzada: ${proposalsThisWeek}/${weeklyTarget}. Parando.`);\n  return [];\n}\n\n// ─── 5. Calcular probabilidad de ejecutar AHORA ───\n// Horas restantes de trabajo esta semana (L-S, 14h/día)\nconst daysLeftAfterToday = 6 - dayOfWeek; // sábado=6 → 0 días más\nconst hoursLeftToday = Math.max(0, 22 - hour);\nconst totalHoursLeft = (daysLeftAfterToday * 14) + hoursLeftToday;\nconst executionsLeft = Math.max(1, totalHoursLeft * 2); // 2 ejecuciones/hora (cada 30 min)\n\n// Probabilidad = propuestas restantes / ejecuciones restantes\n// Si vamos retrasados → probabilidad sube\n// Si vamos adelantados → probabilidad baja\nconst probability = Math.min(0.95, remaining / executionsLeft);\n\n// ─── 6. Lanzar dado ───\nconst roll = Math.random();\nif (roll > probability) {\n  console.log(`⏭️ Skip aleatorio (prob: ${(probability * 100).toFixed(1)}%, enviadas: ${proposalsThisWeek}/${weeklyTarget}, quedan: ${remaining})`);\n  return [];\n}\n\nconsole.log(`✅ Ejecutando (prob: ${(probability * 100).toFixed(1)}%, enviadas: ${proposalsThisWeek}/${weeklyTarget}, objetivo: ${weeklyTarget})`);\n\nreturn [{\n  json: {\n    ...config,\n    current_hour: hour,\n    current_day: day,\n    proposals_this_week: proposalsThisWeek,\n    weekly_target: weeklyTarget,\n    remaining_this_week: remaining,\n    timestamp: now.toISOString()\n  }\n}];"
       },
       "id": "check-schedule",
-      "name": "Verificar Horario",
+      "name": "Control Cuota y Horario",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -146,7 +146,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Construir body para OpenAI con escape seguro de caracteres\nconst d = $input.first().json;\n\nconst systemPrompt = `Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\n{\n  \"relevance_score\": 0-100,\n  \"red_flags\": [\"flag1\", \"flag2\"],\n  \"should_apply\": true/false,\n  \"proposal_text\": \"texto de la propuesta listo para copiar\",\n  \"questions_text\": \"preguntas para el cliente (1-2 máximo)\",\n  \"budget_suggested\": número en EUR,\n  \"delivery_days\": número,\n  \"skills_recommended\": [\"skill1\", \"skill2\"],\n  \"portfolio_items\": [\"item1\", \"item2\"],\n  \"internal_notes\": {\n    \"perfil_detectado\": \"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\",\n    \"dolor_real\": \"descripción\",\n    \"por_que_yo\": \"razón específica\",\n    \"tiempo_estimado\": \"rango\",\n    \"razonamiento_precio\": \"cómo llegaste al precio\"\n  }\n}\n\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.`;\n\nconst userPrompt = `Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\n\n# INSTRUCCIONES DE GENERACIÓN\n\n## OBJETIVO\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\n\n## PASO 0: FILTRO DE VIABILIDAD\nAnaliza si el proyecto merece propuesta. Red flags:\n- Presupuesto < 150 EUR para proyectos de desarrollo/IA\n- Descripción < 3 líneas sin posibilidad de inferir alcance\n- Cliente nuevo + presupuesto bajo + sin verificar pago\n- Frases como 'necesito algo sencillo', 'es rápido' sin presupuesto real\n- Proyecto fuera del stack (n8n, IA, chatbots, automatización, software, web)\n- Más de 30 propuestas enviadas\n\nSi hay 2+ red flags, pon should_apply: false y explica en red_flags.\n\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\n- Tono: FORMAL / CASUAL / URGENTE\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\n\n## PASO 2: DOLOR REAL\nIdentifica el problema de negocio DETRÁS de lo técnico.\n\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\n\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\n- TÉCNICO/NEGOCIO: Restatea su problema con observación experta\n- NOVATO/URGENTE: Hazles sentir que ya tienes la solución\n\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\n\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\n\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\n\n## PASO 4: PREGUNTAS (1-2 máximo)\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\n\n## PRESUPUESTO\nTarifa mínima: 40 EUR/h. Factor valor: 1.2-2.0. Sumar margen Workana 20%.\nRangos: Chatbot básico 350-700, con IA 700-1600, automatización n8n 500-1400, agente IA complejo 1400-3500, software/SaaS 2000-5500.\nNO menciones precio en la propuesta (se negocia en llamada).\n\n## ANTI-PATRONES\n- NO empezar con 'Hola, soy Alex y tengo X años...'\n- NO primera frase genérica\n- NO prometer plazos sin saber alcance\n- NO listar tecnologías sin beneficio\n- NO usar 'podría', 'creo que', 'quizás'\n- NO usar 'Quedo a tu disposición'\n- NO más de 200 palabras\n- NO más de 2 preguntas\n- NO mencionar precio\n\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\n- Sistema Integral de Logística y Envíos para E-commerce\n- Asistente Virtual Inteligente Multicanal 24/7\n- Automatización de Marketing de Contenidos\n- Chatbot Inteligente en WhatsApp con IA para Automatización\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\n\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\n\n---\n\nPROYECTO A ANALIZAR:\n\nTítulo: ${d.full_title || d.title}\nURL: ${d.url}\nDescripción: ${d.full_description || d.description}\nPresupuesto: ${d.budget_detail || d.budget_text || 'No especificado'}\nSkills: ${(d.skills_detail || d.skills || []).join(', ')}\nPropuestas actuales: ${d.proposals_count || 'Desconocido'}\nCliente: ${d.client_name || 'Desconocido'} (${d.client_country || '?'})\nRating: ${d.client_rating || 'Sin rating'}\nVerificado: ${d.client_verified ? 'Sí' : 'No'}\nFecha publicación: ${d.publish_date || 'Desconocido'}\nCategoría: ${d.category || 'IT & Programación'}\n\nTexto completo de la página:\n${(d.full_text || '').substring(0, 3000)}`;\n\nreturn [{\n  json: {\n    ...d,\n    openai_body: {\n      model: 'gpt-4o',\n      temperature: 0.4,\n      max_tokens: 2000,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt }\n      ]\n    }\n  }\n}];\n"
+        "jsCode": "// Construir body para OpenAI - Selección focalizada + precio justo con Claude Code\nconst d = $input.first().json;\n\nconst systemPrompt = `Eres un generador experto de propuestas para Workana. Debes responder SIEMPRE en JSON con esta estructura exacta:\n{\n  \"relevance_score\": 0-100,\n  \"red_flags\": [\"flag1\", \"flag2\"],\n  \"should_apply\": true/false,\n  \"proposal_text\": \"texto de la propuesta listo para copiar\",\n  \"questions_text\": \"preguntas para el cliente (1-2 máximo)\",\n  \"budget_suggested\": número en EUR,\n  \"delivery_days\": número,\n  \"skills_recommended\": [\"skill1\", \"skill2\"],\n  \"portfolio_items\": [\"item1\", \"item2\"],\n  \"internal_notes\": {\n    \"perfil_detectado\": \"técnico/negocio/novato + formal/casual/urgente + precio/calidad/rapidez\",\n    \"dolor_real\": \"descripción\",\n    \"por_que_yo\": \"razón específica\",\n    \"tiempo_estimado\": \"rango\",\n    \"razonamiento_precio\": \"cómo llegaste al precio\"\n  }\n}\n\nIMPORTANTE: El campo 'proposal_text' debe ser la propuesta COMPLETA lista para enviar, incluyendo preguntas al final si las hay.`;\n\nconst userPrompt = `Genera una propuesta para este proyecto de Workana. Sigue ESTRICTAMENTE estas instrucciones:\n\n# INSTRUCCIONES DE GENERACIÓN\n\n## OBJETIVO\nGenerar propuestas cortas y persuasivas que cierren una LLAMADA, no que vendan el proyecto en el texto.\n\n## PASO 0: FILTRO DE VIABILIDAD — FOCALIZADO EN NUESTRAS ÁREAS\nAplicamos (should_apply: true) SOLO si el proyecto encaja en ALGUNA de estas categorías:\n\n### CATEGORÍAS QUE ACEPTAMOS:\n1. **Inteligencia Artificial / Machine Learning**: chatbots, agentes IA, RAG, NLP, automatización con IA, integración de APIs de IA (OpenAI, Claude, etc.)\n2. **Creación de páginas web**: landing pages, sitios corporativos, e-commerce, WordPress, Webflow, tiendas online, blogs, portafolios\n3. **Desarrollo de software**: aplicaciones web, SaaS, plataformas, dashboards, CRM, ERP, sistemas a medida, APIs, backends, frontends\n4. **Automatización y bots**: n8n, Make, Zapier, bots de WhatsApp, Telegram, scrapers, automatización de procesos\n5. **Datos y análisis**: dashboards, BI, análisis de datos, ETL, bases de datos, reporting\n\n### RECHAZAMOS (should_apply: false):\n- Diseño gráfico puro (logos, branding sin web)\n- Traducción / redacción de contenidos sin componente técnico\n- Contabilidad, legal, marketing puro (sin automatización)\n- Presencia física obligatoria\n- Proyectos con más de 50 propuestas enviadas\n- Cualquier cosa fuera de las 5 categorías de arriba\n\n## PASO 1: PERFIL DEL CLIENTE (analízalo internamente)\n- Nivel: TÉCNICO / NEGOCIO / NOVATO\n- Tono: FORMAL / CASUAL / URGENTE\n- Motivación: PRECIO / CALIDAD / RAPIDEZ\n\n## PASO 2: DOLOR REAL\nIdentifica el problema de negocio DETRÁS de lo técnico.\n\n## PASO 3: ESTRUCTURA (máximo 150 palabras)\n\n[GANCHO] 1-2 líneas. NUNCA empieces con 'Hola soy...' ni 'Yo...'\n- TÉCNICO/NEGOCIO: Restatea su problema con observación experta\n- NOVATO/URGENTE: Hazles sentir que ya tienes la solución\n\n[MICRO-INSIGHT] 1-2 líneas. Observación técnica/enfoque concreto para su caso.\n\n[PRUEBA SOCIAL] 1 línea. Resultado concreto con números.\n\n[CIERRE] 1 línea. CTA hacia llamada. Firma: Alex\n\n## PASO 4: PREGUNTAS (1-2 máximo)\nPreguntas estratégicas que demuestren expertise, NO preguntas básicas.\n\n## PRESUPUESTO — PRECIO JUSTO (ignorar el rango del proyecto)\nIMPORTANTE: Ignora completamente el presupuesto que indica el cliente. Nosotros ponemos nuestro precio JUSTO basado en la complejidad REAL del proyecto.\n\nUsamos Claude Code para desarrollo rápido, lo que nos permite ser competitivos sin sacrificar calidad.\n\nReglas de precio:\n- Si el proyecto es POR HORA: siempre 40 EUR/hora\n- Páginas web / landing pages / WordPress: 150-400 EUR (con Claude Code las hacemos muy rápido)\n- E-commerce / tienda online: 400-1200 EUR\n- Chatbot básico (sin IA): 350-600 EUR\n- Chatbot con IA / Agente conversacional: 700-1500 EUR\n- Automatización (n8n, Make, Zapier): 400-1000 EUR\n- Agente IA complejo / RAG / NLP: 1200-2500 EUR\n- Software/SaaS/Plataforma: 1500-4000 EUR\n- Web scraping / ETL: 300-800 EUR\n- Dashboard/BI/Reporting: 600-1500 EUR\n- Integración de APIs: 300-900 EUR\n- App web full-stack: 1000-3500 EUR\n- Otros técnicos: estima según complejidad real, mínimo 150 EUR\n\nIMPORTANTE: Sumar siempre +20% por comisión de Workana al budget_suggested.\nNO menciones precio en la propuesta (se negocia en llamada).\nEl budget_suggested es lo que le cobramos AL CLIENTE (ya con margen Workana incluido).\n\n## ANTI-PATRONES\n- NO empezar con 'Hola, soy Alex y tengo X años...'\n- NO primera frase genérica\n- NO prometer plazos sin saber alcance\n- NO listar tecnologías sin beneficio\n- NO usar 'podría', 'creo que', 'quizás'\n- NO usar 'Quedo a tu disposición'\n- NO más de 200 palabras\n- NO más de 2 preguntas\n- NO mencionar precio\n\n## PORTFOLIO DISPONIBLE (selecciona los 3 más relevantes):\n- Sistema de Análisis de Documentos y Base de Conocimiento Corporativa con IA (RAG)\n- Sistema Integral de Logística y Envíos para E-commerce\n- Asistente Virtual Inteligente Multicanal 24/7\n- Automatización de Marketing de Contenidos\n- Chatbot Inteligente en WhatsApp con IA para Automatización\n- Dashboard Ejecutivo Inteligente con Análisis Predictivo (BI & AI)\n- Automatización Integral de Flujos de Trabajo (BPA) y Conexión de APIs\n- Sistema de Web Scraping Inteligente y Enriquecimiento de Datos B2B\n- Voice Bot: Agente Telefónico con IA para Atención y Agendamiento\n\n## SKILLS DISPONIBLES (selecciona las 5 más relevantes):\nAPI, Inteligencia Artificial, Python, Chatbot, ChatGPT, CRM, Big Data, QA Automation, REST API, Web Scraping, System Analysis, System Programming, Database, ERP, DevOps, SQL, Programación Web, QA, Software Testing\n\n---\n\nPROYECTO A ANALIZAR:\n\nTítulo: ${d.full_title || d.title}\nURL: ${d.url}\nDescripción: ${d.full_description || d.description}\nPresupuesto del cliente: ${d.budget_detail || d.budget_text || 'No especificado'} (IGNORAR - ponemos nuestro precio)\nSkills: ${(d.skills_detail || d.skills || []).join(', ')}\nPropuestas actuales: ${d.proposals_count || 'Desconocido'}\nCliente: ${d.client_name || 'Desconocido'} (${d.client_country || '?'})\nRating: ${d.client_rating || 'Sin rating'}\nVerificado: ${d.client_verified ? 'Sí' : 'No'}\nFecha publicación: ${d.publish_date || 'Desconocido'}\nCategoría: ${d.category || 'IT & Programación'}\n\nTexto completo de la página:\n${(d.full_text || '').substring(0, 3000)}`;\n\nreturn [{\n  json: {\n    ...d,\n    openai_body: {\n      model: 'gpt-4o',\n      temperature: 0.4,\n      max_tokens: 2000,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: systemPrompt },\n        { role: 'user', content: userPrompt }\n      ]\n    }\n  }\n}];\n"
       },
       "id": "prepare-prompt",
       "name": "Preparar Prompt IA",
@@ -196,7 +196,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parsear respuesta de la IA y estructurar datos\nconst aiResponse = $input.first().json;\nconst projectData = $('Combinar Datos').item.json;\n\n// DEBUG: ver qué devuelve la IA\nconsole.log('=== DEBUG IA RESPONSE ===');\nconsole.log('Response keys:', Object.keys(aiResponse));\nconsole.log('Has choices:', !!aiResponse.choices);\nconsole.log('Has error:', !!aiResponse.error);\n\n// Si OpenAI devolvió error\nif (aiResponse.error) {\n  console.error('OpenAI ERROR:', JSON.stringify(aiResponse.error));\n  return [{\n    json: {\n      project: {\n        workana_url: projectData.url,\n        title: projectData.full_title || projectData.title,\n        description: (projectData.full_description || projectData.description || '').substring(0, 2000),\n        category: projectData.category || '',\n        budget_text: projectData.budget_detail || projectData.budget_text || '',\n        skills: projectData.skills_detail || projectData.skills || [],\n        client_name: projectData.client_name || '',\n        client_country: projectData.client_country || '',\n        client_rating: parseFloat(projectData.client_rating) || null,\n        client_verified: projectData.client_verified || false,\n        proposals_count: projectData.proposals_count || 0,\n        publication_date: projectData.publish_date || '',\n        relevance_score: 50,\n        red_flags: ['Error en IA: ' + (aiResponse.error?.message || 'desconocido')],\n        status: 'error_ia',\n      },\n      proposal: {\n        proposal_text: 'ERROR: La IA no pudo generar propuesta. Revisar credenciales OpenAI.',\n        questions_text: '',\n        budget_suggested: null,\n        delivery_days: null,\n        skills_recommended: [],\n        portfolio_items: [],\n        internal_notes: { error: JSON.stringify(aiResponse.error) },\n      },\n      config: projectData.config,\n    }\n  }];\n}\n\nlet proposal;\ntry {\n  const content = aiResponse.choices?.[0]?.message?.content;\n  console.log('AI content (first 300 chars):', (content || 'NULL').substring(0, 300));\n  \n  if (!content) {\n    console.error('NO CONTENT in AI response!');\n    console.error('Full response (first 500):', JSON.stringify(aiResponse).substring(0, 500));\n    return [];\n  }\n  proposal = JSON.parse(content);\n} catch (e) {\n  console.error('JSON PARSE ERROR:', e.message);\n  return [];\n}\n\nconsole.log('AI verdict:', JSON.stringify({\n  should_apply: proposal.should_apply,\n  relevance: proposal.relevance_score,\n  red_flags: proposal.red_flags,\n}));\n\n// Si la IA dice que no debemos aplicar, saltamos\nif (!proposal.should_apply) {\n  console.log('IA says NO APPLY:', projectData.title);\n  return [];\n}\n\nreturn [{\n  json: {\n    project: {\n      workana_url: projectData.url,\n      title: projectData.full_title || projectData.title,\n      description: (projectData.full_description || projectData.description || '').substring(0, 2000),\n      category: projectData.category || '',\n      budget_text: projectData.budget_detail || projectData.budget_text || '',\n      skills: projectData.skills_detail || projectData.skills || [],\n      client_name: projectData.client_name || '',\n      client_country: projectData.client_country || '',\n      client_rating: parseFloat(projectData.client_rating) || null,\n      client_verified: projectData.client_verified || false,\n      proposals_count: projectData.proposals_count || 0,\n      publication_date: projectData.publish_date || '',\n      relevance_score: proposal.relevance_score || 0,\n      red_flags: proposal.red_flags || [],\n      status: 'proposal_generated',\n    },\n    proposal: {\n      proposal_text: proposal.proposal_text || '',\n      questions_text: proposal.questions_text || '',\n      budget_suggested: proposal.budget_suggested || null,\n      delivery_days: proposal.delivery_days || null,\n      skills_recommended: proposal.skills_recommended || [],\n      portfolio_items: proposal.portfolio_items || [],\n      internal_notes: proposal.internal_notes || {},\n    },\n    config: projectData.config,\n  }\n}];"
+        "jsCode": "// Parsear respuesta de la IA y estructurar datos\n// SIEMPRE devuelve datos para guardar en DB (evita reprocesar proyectos)\nconst aiResponse = $input.first().json;\nconst projectData = $('Combinar Datos').item.json;\n\n// Helper para construir objeto proyecto\nfunction buildProject(overrides) {\n  return {\n    workana_url: projectData.url,\n    title: projectData.full_title || projectData.title,\n    description: (projectData.full_description || projectData.description || '').substring(0, 2000),\n    category: projectData.category || '',\n    budget_text: projectData.budget_detail || projectData.budget_text || '',\n    skills: projectData.skills_detail || projectData.skills || [],\n    client_name: projectData.client_name || '',\n    client_country: projectData.client_country || '',\n    client_rating: parseFloat(projectData.client_rating) || null,\n    client_verified: projectData.client_verified || false,\n    proposals_count: projectData.proposals_count || 0,\n    publication_date: projectData.publish_date || '',\n    ...overrides,\n  };\n}\n\n// Si OpenAI devolvió error\nif (aiResponse.error) {\n  console.error('OpenAI ERROR:', JSON.stringify(aiResponse.error));\n  return [{\n    json: {\n      should_apply: false,\n      project: buildProject({\n        relevance_score: 0,\n        red_flags: ['Error en IA: ' + (aiResponse.error?.message || 'desconocido')],\n        status: 'new',\n      }),\n      proposal: null,\n      config: projectData.config,\n    }\n  }];\n}\n\nlet proposal;\ntry {\n  const content = aiResponse.choices?.[0]?.message?.content;\n  if (!content) {\n    console.error('NO CONTENT in AI response');\n    return [{\n      json: {\n        should_apply: false,\n        project: buildProject({ relevance_score: 0, red_flags: ['Sin respuesta de IA'], status: 'new' }),\n        proposal: null,\n        config: projectData.config,\n      }\n    }];\n  }\n  proposal = JSON.parse(content);\n} catch (e) {\n  console.error('JSON PARSE ERROR:', e.message);\n  return [{\n    json: {\n      should_apply: false,\n      project: buildProject({ relevance_score: 0, red_flags: ['Error parseando respuesta IA'], status: 'new' }),\n      proposal: null,\n      config: projectData.config,\n    }\n  }];\n}\n\nconst shouldApply = proposal.should_apply === true;\nconsole.log(`Proyecto: ${projectData.title} | Relevancia: ${proposal.relevance_score} | Aplica: ${shouldApply}`);\n\nreturn [{\n  json: {\n    should_apply: shouldApply,\n    project: buildProject({\n      relevance_score: proposal.relevance_score || 0,\n      red_flags: proposal.red_flags || [],\n      status: shouldApply ? 'proposal_generated' : 'skipped',\n    }),\n    proposal: shouldApply ? {\n      proposal_text: proposal.proposal_text || '',\n      questions_text: proposal.questions_text || '',\n      budget_suggested: proposal.budget_suggested || null,\n      delivery_days: proposal.delivery_days || null,\n      skills_recommended: proposal.skills_recommended || [],\n      portfolio_items: proposal.portfolio_items || [],\n      internal_notes: proposal.internal_notes || {},\n    } : null,\n    config: projectData.config,\n  }\n}];"
       },
       "id": "structure-data",
       "name": "Estructurar Datos",
@@ -210,7 +210,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$('CONFIG').item.json.SUPABASE_URL}}/rest/v1/workana_projects",
+        "url": "={{$('CONFIG').item.json.SUPABASE_URL}}/rest/v1/workana_projects?on_conflict=workana_url",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -228,7 +228,7 @@
             },
             {
               "name": "Prefer",
-              "value": "return=representation"
+              "value": "resolution=merge-duplicates,return=representation"
             }
           ]
         },
@@ -254,7 +254,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2750,
+        2970,
         0
       ]
     },
@@ -292,7 +292,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2970,
+        3190,
         0
       ]
     },
@@ -332,7 +332,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        3190,
+        3410,
         0
       ]
     },
@@ -358,7 +358,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3410,
+        3630,
         -150
       ],
       "retryOnFail": true,
@@ -374,7 +374,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3630,
+        3850,
         -150
       ]
     },
@@ -412,7 +412,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3850,
+        4070,
         -150
       ]
     },
@@ -425,7 +425,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3410,
+        3630,
         150
       ]
     },
@@ -438,7 +438,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4070,
+        4290,
         0
       ]
     },
@@ -466,7 +466,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4290,
+        4510,
         0
       ],
       "credentials": {
@@ -506,15 +506,15 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4510,
+        4730,
         0
       ]
     },
     {
       "parameters": {
-        "content": "## 🤖 WORKANA AUTOPILOT v2\n\n### Flujo:\n1. Cada 30 min scrape a Workana\n2. Filtra proyectos nuevos (batch query)\n3. IA genera propuesta (OpenAI gpt-4o)\n4. Guarda en Supabase (HTTP REST)\n5. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n6. Siempre notifica por WhatsApp\n\n### Credenciales necesarias (solo 2):\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API (apikey)\n\n### Config:\n- Todo se configura en el nodo CONFIG (Code)\n- **AUTO_MODE**: false por defecto (manual)\n- Supabase usa HTTP directo (sin credencial n8n)",
+        "content": "## 🤖 WORKANA AUTOPILOT v3\n\n### Flujo:\n1. Cada 30 min → verifica horario + cuota semanal\n2. Cuota: 50-60 propuestas/semana (aleatorio)\n3. Horarios aleatorios (probabilístico)\n4. Scrape → IA filtra (IA, web, software) → genera propuesta\n5. Precio justo con Claude Code (ignora rango del cliente)\n6. Si AUTO_MODE=true y relevancia ≥80 → envía solo\n7. Siempre notifica por WhatsApp\n\n### Credenciales (2):\n- **OpenAI API** → API key\n- **HTTP Header Auth** → Evolution API (apikey)\n\n### Anti-ban:\n- 50-60 propuestas/semana (no diarias)\n- Horarios aleatorios dentro de L-S 8-22h\n- Skip probabilístico por ejecución",
         "width": 380,
-        "height": 460
+        "height": 520
       },
       "id": "sticky-info",
       "name": "Info",
@@ -523,6 +523,37 @@
       "position": [
         -300,
         -200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "apply-check",
+              "leftValue": "={{$('Estructurar Datos').item.json.should_apply}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-apply",
+      "name": "¿Aplica?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
       ]
     }
   ],
@@ -542,18 +573,7 @@
       "main": [
         [
           {
-            "node": "Verificar Horario",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Verificar Horario": {
-      "main": [
-        [
-          {
-            "node": "Scrape Workana",
+            "node": "Control Cuota y Horario",
             "type": "main",
             "index": 0
           }
@@ -641,7 +661,7 @@
       "main": [
         [
           {
-            "node": "Preparar Propuesta",
+            "node": "¿Aplica?",
             "type": "main",
             "index": 0
           }
@@ -759,6 +779,29 @@
         [
           {
             "node": "IA Genera Propuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Aplica?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Propuesta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Control Cuota y Horario": {
+      "main": [
+        [
+          {
+            "node": "Scrape Workana",
             "type": "main",
             "index": 0
           }
