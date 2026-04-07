@@ -11,10 +11,23 @@ class ProposalSubmitter {
 
       // 1. Navegar al proyecto
       await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      await this.bm.randomDelay(2000, 4000);
+      await this.bm.randomDelay(3000, 5000);
 
-      // 2. Buscar y clickar el botón de "Enviar propuesta"
-      const applyClicked = await this._clickApplyButton(page);
+      // 1.5. Esperar a que Workana MFE renderice el contenido dinámico
+      await page.waitForFunction(
+        () => document.body.innerText.length > 500,
+        { timeout: 15000 }
+      ).catch(() => console.log('[Submitter] Timeout esperando render MFE'));
+      await this.bm.randomDelay(1000, 2000);
+
+      // 2. Buscar y clickar el botón de "Enviar propuesta" (con reintento)
+      let applyClicked = await this._clickApplyButton(page);
+      if (!applyClicked) {
+        // Reintentar tras espera extra (MFE puede tardar)
+        console.log('[Submitter] Botón no encontrado, reintentando en 5s...');
+        await this.bm.randomDelay(4000, 6000);
+        applyClicked = await this._clickApplyButton(page);
+      }
       if (!applyClicked) {
         return {
           success: false,
@@ -102,10 +115,12 @@ class ProposalSubmitter {
       'a.btn-primary',
     ];
 
-    // También buscar por texto
+    // También buscar por texto (incluir variantes con "una")
     const textPatterns = [
+      'Enviar una propuesta',
       'Enviar propuesta',
       'Enviar Propuesta',
+      'Send a proposal',
       'Send proposal',
       'Send Proposal',
       'Aplicar',

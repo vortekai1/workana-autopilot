@@ -173,7 +173,7 @@ app.get('/debug-html', async (req, res) => {
         success: true,
         currentUrl,
         title,
-        html: html.substring(0, 15000),
+        html: html.substring(0, 100000),
       });
     } finally {
       await page.close();
