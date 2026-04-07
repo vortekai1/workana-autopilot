@@ -351,7 +351,10 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"url\": \"{{$('Preparar Propuesta').item.json.project.workana_url}}\",\n  \"text\": {{JSON.stringify($('Preparar Propuesta').item.json.proposal_text)}},\n  \"budget\": {{$('Preparar Propuesta').item.json.budget_suggested || 'null'}},\n  \"delivery_days\": {{$('Preparar Propuesta').item.json.delivery_days || 'null'}}\n}"
+        "jsonBody": "={\n  \"url\": \"{{$('Preparar Propuesta').item.json.project.workana_url}}\",\n  \"text\": {{JSON.stringify($('Preparar Propuesta').item.json.proposal_text)}},\n  \"budget\": {{$('Preparar Propuesta').item.json.budget_suggested || 'null'}},\n  \"delivery_days\": {{$('Preparar Propuesta').item.json.delivery_days || 'null'}}\n}",
+        "options": {
+          "timeout": 300000
+        }
       },
       "id": "auto-submit",
       "name": "Enviar Automático",
@@ -363,7 +366,8 @@
       ],
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {

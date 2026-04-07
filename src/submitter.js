@@ -5,63 +5,65 @@ class ProposalSubmitter {
 
   async submit(projectUrl, proposalText, budget, deliveryDays) {
     const page = await this.bm.newPage();
+    const startTime = Date.now();
 
     try {
       console.log(`[Submitter] Enviando propuesta a: ${projectUrl}`);
 
       // 1. Navegar al proyecto
       await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      await this.bm.randomDelay(3000, 5000);
+      await this.bm.randomDelay(2000, 3000);
 
       // 1.5. Esperar a que Workana MFE renderice el contenido dinámico
       await page.waitForFunction(
         () => document.body.innerText.length > 500,
         { timeout: 15000 }
       ).catch(() => console.log('[Submitter] Timeout esperando render MFE'));
-      await this.bm.randomDelay(1000, 2000);
+      await this.bm.randomDelay(800, 1500);
 
       // 2. Buscar y clickar el botón de "Enviar propuesta" (con reintento)
       let applyClicked = await this._clickApplyButton(page);
       if (!applyClicked) {
-        // Reintentar tras espera extra (MFE puede tardar)
-        console.log('[Submitter] Botón no encontrado, reintentando en 5s...');
-        await this.bm.randomDelay(4000, 6000);
+        console.log('[Submitter] Botón no encontrado, reintentando en 3s...');
+        await this.bm.randomDelay(2500, 4000);
         applyClicked = await this._clickApplyButton(page);
       }
       if (!applyClicked) {
         return {
           success: false,
           message: 'No se encontró el botón de enviar propuesta. Puede que ya hayas aplicado o la sesión expiró.',
+          elapsed_ms: Date.now() - startTime,
         };
       }
 
-      await this.bm.randomDelay(2000, 3000);
+      await this.bm.randomDelay(1500, 2500);
 
       // 3. Esperar a que cargue el formulario de propuesta
       await page.waitForSelector('textarea, form', { timeout: 10000 }).catch(() => {});
-      await this.bm.randomDelay(1000, 2000);
+      await this.bm.randomDelay(800, 1500);
 
-      // 4. Rellenar la propuesta (texto)
+      // 4. Rellenar la propuesta (texto) — optimizado para velocidad
       const textFilled = await this._fillProposalText(page, proposalText);
       if (!textFilled) {
         return {
           success: false,
           message: 'No se encontró el campo de texto de la propuesta.',
+          elapsed_ms: Date.now() - startTime,
         };
       }
 
-      await this.bm.randomDelay(1500, 3000);
+      await this.bm.randomDelay(1000, 2000);
 
       // 5. Rellenar presupuesto
       if (budget) {
         await this._fillBudget(page, budget);
-        await this.bm.randomDelay(1000, 2000);
+        await this.bm.randomDelay(800, 1500);
       }
 
       // 6. Rellenar plazo de entrega
       if (deliveryDays) {
         await this._fillDeliveryDays(page, deliveryDays);
-        await this.bm.randomDelay(1000, 2000);
+        await this.bm.randomDelay(800, 1500);
       }
 
       // 7. Scroll suave al botón de enviar
@@ -71,7 +73,7 @@ class ProposalSubmitter {
         );
         if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
-      await this.bm.randomDelay(1500, 2500);
+      await this.bm.randomDelay(1000, 2000);
 
       // 8. Enviar
       const submitted = await this._clickSubmitButton(page);
@@ -79,21 +81,23 @@ class ProposalSubmitter {
         return {
           success: false,
           message: 'No se encontró el botón de enviar. Revisa manualmente.',
+          elapsed_ms: Date.now() - startTime,
         };
       }
 
       // 9. Esperar resultado
       await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-      await this.bm.randomDelay(2000, 3000);
+      await this.bm.randomDelay(1500, 2500);
 
       // 10. Verificar éxito
       const result = await this._checkSubmissionResult(page);
+      result.elapsed_ms = Date.now() - startTime;
 
-      console.log(`[Submitter] Resultado: ${result.message}`);
+      console.log(`[Submitter] Resultado: ${result.message} (${result.elapsed_ms}ms)`);
       return result;
     } catch (error) {
       console.error(`[Submitter] Error: ${error.message}`);
-      return { success: false, message: `Error: ${error.message}` };
+      return { success: false, message: `Error: ${error.message}`, elapsed_ms: Date.now() - startTime };
     } finally {
       await page.close();
     }
@@ -104,7 +108,6 @@ class ProposalSubmitter {
   // ============================================
 
   async _clickApplyButton(page) {
-    // Workana puede tener varios textos/selectores para el botón de aplicar
     const selectors = [
       'a[href*="/bid/"]',
       'a[href*="/proposal/"]',
@@ -115,7 +118,6 @@ class ProposalSubmitter {
       'a.btn-primary',
     ];
 
-    // También buscar por texto (incluir variantes con "una")
     const textPatterns = [
       'Enviar una propuesta',
       'Enviar propuesta',
@@ -166,7 +168,7 @@ class ProposalSubmitter {
       'textarea.proposal-text',
       '#proposal-description',
       '#bid-description',
-      'textarea', // Último recurso: cualquier textarea
+      'textarea',
     ];
 
     for (const sel of textareaSelectors) {
@@ -175,40 +177,31 @@ class ProposalSubmitter {
         // Limpiar campo
         await textarea.click({ clickCount: 3 });
         await page.keyboard.press('Backspace');
-        await this.bm.randomDelay(300, 500);
+        await this.bm.randomDelay(200, 400);
 
-        // Escribir con comportamiento humano
-        // Para textos largos, usamos una combinación:
-        // - Primeras líneas con delay (parece humano)
-        // - El resto más rápido (como si pegara)
-        const lines = text.split('\n');
+        // Estrategia híbrida: primeros ~30 chars humanos, resto inyectado
+        // Esto es suficiente para parecer humano sin tardar 60s
+        const HUMAN_CHARS = 30;
+        const humanPart = text.substring(0, HUMAN_CHARS);
+        const restPart = text.substring(HUMAN_CHARS);
 
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-
-          if (i < 3) {
-            // Primeras líneas: escritura humana
-            for (const char of line) {
-              await page.keyboard.type(char, { delay: 15 + Math.random() * 35 });
-            }
-          } else {
-            // Resto: simular pegado rápido
-            await textarea.evaluate(
-              (el, content) => {
-                el.value = el.value + content;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-              },
-              line
-            );
-          }
-
-          if (i < lines.length - 1) {
-            await page.keyboard.press('Enter');
-            await this.bm.randomDelay(50, 150);
-          }
+        // Escribir inicio con delay humano
+        for (const char of humanPart) {
+          await page.keyboard.type(char, { delay: 20 + Math.random() * 40 });
         }
 
-        // Trigger eventos de cambio por si acaso
+        // Inyectar el resto directamente (simula pegado)
+        if (restPart) {
+          await textarea.evaluate(
+            (el, content) => {
+              el.value = el.value + content;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            },
+            restPart
+          );
+        }
+
+        // Trigger eventos de cambio
         await textarea.evaluate(el => {
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -238,7 +231,7 @@ class ProposalSubmitter {
       if (input) {
         await input.click({ clickCount: 3 });
         await this.bm.randomDelay(200, 400);
-        await input.type(String(budget), { delay: 50 + Math.random() * 50 });
+        await input.type(String(budget), { delay: 40 + Math.random() * 40 });
 
         await input.evaluate(el => {
           el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -271,7 +264,7 @@ class ProposalSubmitter {
           await el.select(String(days));
         } else {
           await el.click({ clickCount: 3 });
-          await el.type(String(days), { delay: 50 + Math.random() * 50 });
+          await el.type(String(days), { delay: 40 + Math.random() * 40 });
         }
 
         await el.evaluate(e => {
@@ -329,13 +322,11 @@ class ProposalSubmitter {
   async _checkSubmissionResult(page) {
     const currentUrl = page.url();
 
-    // Si ya no estamos en la página del formulario, probablemente fue bien
     const isStillOnForm =
       currentUrl.includes('/bid/') ||
       currentUrl.includes('/proposal/new') ||
       currentUrl.includes('/apply');
 
-    // Buscar mensajes de éxito o error en la página
     const pageResult = await page.evaluate(() => {
       const successTexts = ['propuesta enviada', 'proposal sent', 'éxito', 'success', 'gracias', 'thank you'];
       const errorTexts = ['error', 'no se pudo', 'failed', 'ya has enviado', 'already sent'];
