@@ -39,17 +39,39 @@ class ProposalSubmitter {
       }
       log('2. Botón "Enviar propuesta" clickeado');
 
-      // 3. Esperar que el formulario cargue COMPLETAMENTE
+      // 3. Esperar que el formulario cargue — puede aparecer "Área protegida"
       await this.bm.randomDelay(3000, 5000);
+
+      // Verificar si Workana pide confirmar contraseña ("Área protegida")
+      const protectedHandled = await this._handleProtectedArea(page, log);
+      if (protectedHandled) {
+        log('3a. "Área protegida" detectada y resuelta, esperando formulario...');
+        await this.bm.randomDelay(3000, 5000);
+      }
+
       const formLoaded = await page.waitForFunction(
         () => document.querySelectorAll('textarea').length > 0,
         { timeout: 20000 }
       ).catch(() => null);
 
       if (!formLoaded) {
-        log('3. ERROR: Formulario no cargó');
-        if (debug) screenshots.noForm = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-        return { success: false, message: 'El formulario no cargó', elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
+        // Puede haber aparecido "Área protegida" después de la primera espera
+        const retryProtected = await this._handleProtectedArea(page, log);
+        if (retryProtected) {
+          log('3b. "Área protegida" detectada en retry, esperando formulario...');
+          await this.bm.randomDelay(3000, 5000);
+          await page.waitForFunction(
+            () => document.querySelectorAll('textarea').length > 0,
+            { timeout: 20000 }
+          ).catch(() => null);
+        }
+        // Verificar de nuevo si el formulario cargó
+        const hasTextarea = await page.evaluate(() => document.querySelectorAll('textarea').length > 0);
+        if (!hasTextarea) {
+          log('3. ERROR: Formulario no cargó');
+          if (debug) screenshots.noForm = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+          return { success: false, message: 'El formulario no cargó', elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
+        }
       }
 
       await this.bm.randomDelay(2000, 3000);
@@ -90,9 +112,22 @@ class ProposalSubmitter {
 
       // NO rellenamos delivery time (no obligatorio)
 
+      // Verificar "Área protegida" antes de submit (puede aparecer durante interacción)
+      const preSubmitProtected = await this._handleProtectedArea(page, log);
+      if (preSubmitProtected) {
+        log('8b. "Área protegida" resuelta antes de submit, esperando formulario...');
+        await this.bm.randomDelay(3000, 5000);
+        // Esperar que el formulario vuelva a cargar
+        await page.waitForFunction(
+          () => document.querySelectorAll('textarea').length > 0,
+          { timeout: 20000 }
+        ).catch(() => null);
+        await this.bm.randomDelay(2000, 3000);
+      }
+
       if (debug) screenshots.beforeSubmit = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
-      // 9. Click en "Enviar propuesta"
+      // 9. Click en "Enviar propuesta/presupuesto"
       const submitClicked = await this._clickSubmitButton(page);
       log(`9. Submit clickeado: ${submitClicked}`);
 
@@ -127,6 +162,62 @@ class ProposalSubmitter {
     } finally {
       await page.close();
     }
+  }
+
+  // =============================================
+  // HANDLER "ÁREA PROTEGIDA" (Workana pide confirmar contraseña)
+  // =============================================
+
+  async _handleProtectedArea(page, log) {
+    const isProtected = await page.evaluate(() => {
+      const bodyText = document.body?.innerText?.toLowerCase() || '';
+      return bodyText.includes('área protegida') || bodyText.includes('confirmar contraseña') ||
+        bodyText.includes('protected area') || bodyText.includes('confirm password');
+    });
+
+    if (!isProtected) return false;
+
+    log('⚠️ "Área protegida" detectada — ingresando contraseña...');
+
+    // Buscar input de contraseña
+    const passwordInput = await page.$('input[type="password"]');
+    if (!passwordInput) {
+      log('ERROR: No se encontró input de contraseña en "Área protegida"');
+      return false;
+    }
+
+    // Escribir contraseña
+    await passwordInput.click();
+    await this.bm.randomDelay(300, 500);
+    await passwordInput.type(this.bm.password, { delay: 30 + Math.random() * 50 });
+    await this.bm.randomDelay(500, 1000);
+
+    // Click en "Confirmar contraseña"
+    const confirmed = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('button, input[type="submit"], a')];
+      const btn = buttons.find(el => {
+        const text = ((el.textContent || '') + ' ' + (el.value || '')).trim().toLowerCase();
+        return el.offsetHeight > 0 && (text.includes('confirmar') || text.includes('confirm') || text.includes('continuar'));
+      });
+      if (btn) { btn.click(); return true; }
+      return false;
+    });
+
+    if (!confirmed) {
+      // Fallback: Enter
+      await page.keyboard.press('Enter');
+    }
+
+    log('Contraseña enviada, esperando redirección...');
+    await this.bm.randomDelay(3000, 5000);
+
+    // Esperar a que desaparezca "Área protegida"
+    await page.waitForFunction(
+      () => !document.body.innerText.toLowerCase().includes('área protegida'),
+      { timeout: 15000 }
+    ).catch(() => {});
+
+    return true;
   }
 
   // =============================================
@@ -440,20 +531,23 @@ class ProposalSubmitter {
     const clicked = await page.evaluate(() => {
       const allClickable = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')];
 
-      // 1. Match exacto "enviar propuesta" por textContent O value
+      // 1. Match exacto por textContent O value (incluye "enviar presupuesto")
+      const exactTexts = ['enviar propuesta', 'enviar presupuesto', 'send proposal', 'send budget'];
       let btn = allClickable.find(el => {
         const tc = (el.textContent || '').trim().toLowerCase();
         const val = (el.value || '').trim().toLowerCase();
-        return el.offsetHeight > 0 && (tc === 'enviar propuesta' || val === 'enviar propuesta' ||
-          tc === 'send proposal' || val === 'send proposal');
+        return el.offsetHeight > 0 && exactTexts.some(t => tc === t || val === t);
       });
 
-      // 2. Contiene "enviar propuesta" en textContent O value
+      // 2. Contiene "enviar propuesta" o "enviar presupuesto"
       if (!btn) {
         btn = allClickable.find(el => {
           const tc = (el.textContent || '').trim().toLowerCase();
           const val = (el.value || '').trim().toLowerCase();
-          return el.offsetHeight > 0 && (tc.includes('enviar propuesta') || val.includes('enviar propuesta'));
+          return el.offsetHeight > 0 && (
+            tc.includes('enviar propuesta') || val.includes('enviar propuesta') ||
+            tc.includes('enviar presupuesto') || val.includes('enviar presupuesto')
+          );
         });
       }
 
@@ -504,10 +598,12 @@ class ProposalSubmitter {
       const hasVisibleTextarea = [...textareas].some(t => t.offsetHeight > 20);
 
       // Buscar input[type=submit] o botón enviar todavía visible
-      const hasSubmitBtn = !!document.querySelector('input[type="submit"]') ||
+      const submitInput = document.querySelector('input[type="submit"]');
+      const hasSubmitInput = submitInput && submitInput.offsetHeight > 0;
+      const hasSubmitBtn = hasSubmitInput ||
         [...document.querySelectorAll('button')].some(b =>
           b.offsetHeight > 0 &&
-          ((b.textContent || '').trim().toLowerCase().includes('enviar propuesta'))
+          ((b.textContent || '').trim().toLowerCase().includes('enviar'))
         );
 
       // Confirmación de éxito
