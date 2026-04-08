@@ -3,7 +3,7 @@ class ProposalSubmitter {
     this.bm = browserManager;
   }
 
-  async submit(projectUrl, proposalText, budget, deliveryDays, debug = false) {
+  async submit(projectUrl, proposalText, budget, deliveryDays, debug = true) {
     const page = await this.bm.newPage();
     const startTime = Date.now();
     const log = (msg) => console.log(`[Submitter] ${msg}`);
@@ -22,6 +22,9 @@ class ProposalSubmitter {
         { timeout: 15000 }
       ).catch(() => log('Timeout esperando render MFE'));
       await this.bm.randomDelay(2000, 3000);
+
+      // 1b. Cerrar banner de cookies si existe (bloquea clicks)
+      await this._dismissCookieConsent(page);
 
       const projectPageUrl = page.url();
       log(`1. Página del proyecto cargada: ${projectPageUrl}`);
@@ -160,9 +163,22 @@ class ProposalSubmitter {
         return { success: false, message: 'No se encontró botón submit', elapsed_ms: Date.now() - startTime, formInfo, screenshots: debug ? screenshots : undefined };
       }
 
-      // 11. Esperar resultado
-      log('11. Esperando resultado...');
-      await this.bm.randomDelay(5000, 8000);
+      // 11. Esperar resultado — navegación O cambio en la página
+      log('11. Esperando resultado (navegación o cambio en página)...');
+      await Promise.race([
+        page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+        page.waitForFunction(
+          () => {
+            const text = document.body.innerText.toLowerCase();
+            return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
+              text.includes('felicitaciones') || text.includes('proposal sent') ||
+              text.includes('especifique un alcance') || text.includes('campo obligatorio');
+          },
+          { timeout: 15000 }
+        ).catch(() => null),
+      ]);
+      // Dar tiempo extra para que la página estabilice
+      await this.bm.randomDelay(2000, 3000);
 
       const finalUrl = page.url();
       log(`11. URL final: ${finalUrl}`);
@@ -516,19 +532,12 @@ class ProposalSubmitter {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await this.bm.randomDelay(1000, 2000);
 
-    // Debug: listar todos los candidatos
-    const btnInfo = await page.evaluate(() => {
-      const all = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')];
-      return all.filter(el => el.offsetHeight > 0).map(el => ({
-        tag: el.tagName,
-        type: el.type || '',
-        text: (el.textContent || '').trim().substring(0, 60),
-        value: (el.value || '').substring(0, 60),
-      }));
-    });
-    console.log(`[Submitter] All clickable: ${JSON.stringify(btnInfo)}`);
+    // Cerrar cookies una vez más por si reaparecieron
+    await this._dismissCookieConsent(page);
+    await this.bm.randomDelay(500, 800);
 
-    const clicked = await page.evaluate(() => {
+    // Marcar el botón submit con data attribute para clickarlo con Puppeteer nativo
+    const found = await page.evaluate(() => {
       const allClickable = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')];
 
       // 1. Match exacto por textContent O value (incluye "enviar presupuesto")
@@ -567,20 +576,37 @@ class ProposalSubmitter {
       }
 
       if (btn) {
+        // Marcar para click nativo de Puppeteer
+        btn.setAttribute('data-wk-submit', '1');
         btn.scrollIntoView({ block: 'center' });
-        btn.click();
         return {
-          clicked: true,
+          found: true,
           tag: btn.tagName, type: btn.type,
           text: (btn.textContent || '').trim().substring(0, 40),
           value: (btn.value || '').substring(0, 40),
         };
       }
-      return { clicked: false };
+      return { found: false };
     });
 
-    console.log(`[Submitter] Submit result: ${JSON.stringify(clicked)}`);
-    return clicked.clicked;
+    console.log(`[Submitter] Submit target: ${JSON.stringify(found)}`);
+    if (!found.found) return false;
+
+    // Click NATIVO de Puppeteer (simula mouse real: mouseover→mousedown→mouseup→click)
+    // Esto es más fiable que el.click() programático para formularios MFE
+    try {
+      await page.click('[data-wk-submit="1"]');
+      console.log('[Submitter] Click nativo OK');
+    } catch (e) {
+      // Fallback: click programático
+      console.log(`[Submitter] Click nativo falló (${e.message}), usando programático...`);
+      await page.evaluate(() => {
+        const btn = document.querySelector('[data-wk-submit="1"]');
+        if (btn) btn.click();
+      });
+    }
+
+    return true;
   }
 
   // =============================================
@@ -675,6 +701,31 @@ class ProposalSubmitter {
 
     // REGLA 5: Default → failure (conservador)
     return { success: false, message: 'No se pudo confirmar el envío', url: currentUrl, pageState };
+  }
+
+  // =============================================
+  // CERRAR BANNER DE COOKIES (bloquea clicks en el formulario)
+  // =============================================
+
+  async _dismissCookieConsent(page) {
+    const dismissed = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('button')];
+      const cookieBtn = buttons.find(b => {
+        const text = (b.textContent || '').trim().toLowerCase();
+        return text.includes('aceptar todas las cookies') || text.includes('accept all cookies') ||
+          text.includes('aceptar cookies') || text.includes('accept cookies');
+      });
+      if (cookieBtn && cookieBtn.offsetHeight > 0) {
+        cookieBtn.click();
+        return true;
+      }
+      return false;
+    });
+    if (dismissed) {
+      console.log('[Submitter] Cookie consent cerrado');
+      await this.bm.randomDelay(500, 1000);
+    }
+    return dismissed;
   }
 }
 
