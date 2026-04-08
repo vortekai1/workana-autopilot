@@ -656,9 +656,21 @@ class ProposalSubmitter {
       return { success: false, message: 'El formulario sigue visible — la propuesta NO se envió', url: currentUrl, pageState };
     }
 
-    // REGLA 4: Formulario desapareció y URL cambió → probable éxito
+    // REGLA 4: URL cambió a inbox/conversación → éxito (Workana redirige tras enviar)
+    if (currentUrl.includes('/inbox/')) {
+      return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
+    }
+
+    // REGLA 4b: URL cambió y formulario no visible → probable éxito
     if (currentUrl !== formUrl && !pageState.hasVisibleTextarea) {
       return { success: true, message: 'URL cambió y formulario no visible (probable éxito)', url: currentUrl, pageState };
+    }
+
+    // REGLA 4c: URL cambió significativamente (no solo query params) → probable éxito
+    const formPath = formUrl.split('?')[0];
+    const currentPath = currentUrl.split('?')[0];
+    if (currentPath !== formPath && !pageState.hasSubmitBtn) {
+      return { success: true, message: 'URL cambió y botón submit desapareció (probable éxito)', url: currentUrl, pageState };
     }
 
     // REGLA 5: Default → failure (conservador)
