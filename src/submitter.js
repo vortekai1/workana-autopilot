@@ -131,6 +131,11 @@ class ProposalSubmitter {
 
       // NO rellenamos delivery time (no obligatorio)
 
+      // 9. Rellenar task scopes (Workana exige alcance para cada tarea)
+      const tasksFilled = await this._fillTaskScopes(page);
+      log(`9. Task scopes rellenados: ${tasksFilled}`);
+      await this.bm.randomDelay(500, 1000);
+
       // Verificar "Área protegida" antes de submit (puede aparecer durante interacción)
       const preSubmitProtected = await this._handleProtectedArea(page, log);
       if (preSubmitProtected) {
@@ -146,25 +151,25 @@ class ProposalSubmitter {
 
       if (debug) screenshots.beforeSubmit = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
-      // 9. Click en "Enviar propuesta/presupuesto"
+      // 10. Click en "Enviar propuesta/presupuesto"
       const submitClicked = await this._clickSubmitButton(page);
-      log(`9. Submit clickeado: ${submitClicked}`);
+      log(`10. Submit clickeado: ${submitClicked}`);
 
       if (!submitClicked) {
         if (debug) screenshots.noSubmitBtn = await page.screenshot({ encoding: 'base64' }).catch(() => null);
         return { success: false, message: 'No se encontró botón submit', elapsed_ms: Date.now() - startTime, formInfo, screenshots: debug ? screenshots : undefined };
       }
 
-      // 10. Esperar resultado
-      log('10. Esperando resultado...');
+      // 11. Esperar resultado
+      log('11. Esperando resultado...');
       await this.bm.randomDelay(5000, 8000);
 
       const finalUrl = page.url();
-      log(`10. URL final: ${finalUrl}`);
+      log(`11. URL final: ${finalUrl}`);
 
       if (debug) screenshots.afterSubmit = await page.screenshot({ encoding: 'base64' }).catch(() => null);
 
-      // 11. Verificar resultado
+      // 12. Verificar resultado
       const result = await this._checkSubmissionResult(page, formUrl);
       result.elapsed_ms = Date.now() - startTime;
       result.formInfo = formInfo;
@@ -172,7 +177,7 @@ class ProposalSubmitter {
       result.finalUrl = finalUrl;
       if (debug) result.screenshots = screenshots;
 
-      log(`11. Resultado: ${result.success ? '✅' : '❌'} ${result.message}`);
+      log(`12. Resultado: ${result.success ? '✅' : '❌'} ${result.message}`);
       log(`=== FIN SUBMIT (${result.elapsed_ms}ms) ===`);
       return result;
     } catch (error) {
@@ -427,6 +432,32 @@ class ProposalSubmitter {
   }
 
   // =============================================
+  // RELLENAR TASK SCOPES (Workana valida alcance de cada tarea)
+  // =============================================
+
+  async _fillTaskScopes(page) {
+    const count = await page.evaluate(() => {
+      // Workana tiene selects bid[task][N][scope] con opciones como "", "included", "extra"
+      // Necesitamos seleccionar la primera opción NO vacía para cada uno
+      const taskSelects = [...document.querySelectorAll('select[name*="bid[task]"][name*="[scope]"]')];
+      let filled = 0;
+      for (const sel of taskSelects) {
+        if (sel.value && sel.value !== '') continue; // Ya tiene valor
+        // Seleccionar la primera opción con valor no vacío
+        const validOption = [...sel.options].find(o => o.value && o.value !== '');
+        if (validOption) {
+          sel.value = validOption.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          sel.dispatchEvent(new Event('input', { bubbles: true }));
+          filled++;
+        }
+      }
+      return filled;
+    });
+    return count;
+  }
+
+  // =============================================
   // RELLENAR PRESUPUESTO
   // =============================================
 
@@ -589,7 +620,8 @@ class ProposalSubmitter {
 
       // Errores de validación
       const hasValidationError = bodyText.includes('campo obligatorio') ||
-        bodyText.includes('required field') || bodyText.includes('por favor complet');
+        bodyText.includes('required field') || bodyText.includes('por favor complet') ||
+        bodyText.includes('especifique un alcance') || bodyText.includes('alcance válido');
 
       return {
         hasVisibleTextarea,
@@ -614,12 +646,14 @@ class ProposalSubmitter {
       return { success: true, message: 'Propuesta ya enviada anteriormente', url: currentUrl };
     }
 
-    // REGLA 3: Formulario sigue visible → failure
+    // REGLA 3: Error de validación → failure
+    if (pageState.hasValidationError) {
+      return { success: false, message: 'Validación del formulario falló', url: currentUrl, pageState };
+    }
+
+    // REGLA 3b: Formulario sigue visible con botón submit → failure
     if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn) {
-      const reason = pageState.hasValidationError
-        ? 'Validación del formulario falló'
-        : 'El formulario sigue visible — la propuesta NO se envió';
-      return { success: false, message: reason, url: currentUrl, pageState };
+      return { success: false, message: 'El formulario sigue visible — la propuesta NO se envió', url: currentUrl, pageState };
     }
 
     // REGLA 4: Formulario desapareció y URL cambió → probable éxito
