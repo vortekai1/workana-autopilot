@@ -183,34 +183,35 @@ class ProposalSubmitter {
       ]);
       await this.bm.randomDelay(1500, 2500);
 
-      // 11b. Si la URL no cambió, intentar form.requestSubmit() como fallback
+      // 11b. Si la URL no cambió, intentar form.requestSubmit() como ÚNICO fallback
+      // NUNCA usar form.submit() — bypasea validación y causa falsos positivos
       if (page.url() === formUrl) {
-        log('11b. URL no cambió tras click — intentando form.requestSubmit() como fallback...');
+        log('11b. URL no cambió tras click — intentando form.requestSubmit()...');
         const requestSubmitResult = await page.evaluate(() => {
           const form = document.querySelector('form');
           if (form && typeof form.requestSubmit === 'function') {
             try { form.requestSubmit(); return 'requestSubmit OK'; } catch (e) { return `requestSubmit error: ${e.message}`; }
           }
-          if (form) {
-            try { form.submit(); return 'submit OK'; } catch (e) { return `submit error: ${e.message}`; }
-          }
-          return 'no form found';
+          // NO usar form.submit() — bypasea validación del cliente
+          return form ? 'requestSubmit not available' : 'no form found';
         });
         log(`11b. Resultado fallback: ${requestSubmitResult}`);
 
-        // Esperar de nuevo navegación/cambio
-        await Promise.race([
-          page.waitForNavigation({ timeout: 10000 }).catch(() => null),
-          page.waitForFunction(
-            () => {
-              const text = document.body.innerText.toLowerCase();
-              return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
-                text.includes('especifique un alcance') || text.includes('campo obligatorio');
-            },
-            { timeout: 10000 }
-          ).catch(() => null),
-        ]);
-        await this.bm.randomDelay(2000, 3000);
+        if (requestSubmitResult === 'requestSubmit OK') {
+          // Esperar de nuevo navegación/cambio
+          await Promise.race([
+            page.waitForNavigation({ timeout: 10000 }).catch(() => null),
+            page.waitForFunction(
+              () => {
+                const text = document.body.innerText.toLowerCase();
+                return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
+                  text.includes('especifique un alcance') || text.includes('campo obligatorio');
+              },
+              { timeout: 10000 }
+            ).catch(() => null),
+          ]);
+          await this.bm.randomDelay(2000, 3000);
+        }
       }
 
       const finalUrl = page.url();
@@ -546,12 +547,16 @@ class ProposalSubmitter {
         console.log(`[Submitter] Budget input: ${sel} (name=${info.name}, current=${info.currentValue})`);
         await input.click({ clickCount: 3 });
         await this.bm.randomDelay(200, 400);
+        // Escribir con Puppeteer type (simula teclas reales)
         await input.type(String(amount), { delay: 40 + Math.random() * 40 });
-        await input.evaluate(el => {
+        // TAMBIÉN usar native setter para que el framework MFE detecte el cambio
+        await input.evaluate((el, val) => {
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          nativeSetter.call(el, String(val));
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('blur', { bubbles: true }));
-        });
+        }, amount);
         return `${amount} (${isHourly ? 'hourly' : 'fixed'})`;
       }
     }
@@ -723,20 +728,29 @@ class ProposalSubmitter {
       return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
     }
 
-    // REGLA 4b: URL cambió y formulario no visible → probable éxito
-    if (currentUrl !== formUrl && !pageState.hasVisibleTextarea) {
-      return { success: true, message: 'URL cambió y formulario no visible (probable éxito)', url: currentUrl, pageState };
+    // REGLA 4b: URL contiene "ref=roaster" → éxito (Workana usa esto tras enviar)
+    if (currentUrl.includes('ref=roaster')) {
+      return { success: true, message: 'Propuesta enviada (ref=roaster en URL)', url: currentUrl, pageState };
     }
 
-    // REGLA 4c: URL cambió significativamente (no solo query params) → probable éxito
-    const formPath = formUrl.split('?')[0];
-    const currentPath = currentUrl.split('?')[0];
-    if (currentPath !== formPath && !pageState.hasSubmitBtn) {
-      return { success: true, message: 'URL cambió y botón submit desapareció (probable éxito)', url: currentUrl, pageState };
+    // REGLA 4c: URL cambió a página de proyecto (sin /bid/) Y formulario desapareció
+    // SOLO si tenemos evidencia positiva: no hay textarea Y no hay submit Y no hay error
+    if (currentUrl !== formUrl && !pageState.hasVisibleTextarea && !pageState.hasSubmitBtn && !pageState.hasValidationError) {
+      // Verificar que NO estamos en una página de error o redirección genérica
+      const hasPositiveSignal = await page.evaluate(() => {
+        const text = document.body?.innerText?.toLowerCase() || '';
+        // Debe tener contenido del proyecto (título, descripción) o mensaje de éxito
+        return text.includes('propuesta') || text.includes('proposal') ||
+          text.includes('presupuesto') || text.includes('budget') ||
+          text.includes('proyecto') || text.includes('project');
+      });
+      if (hasPositiveSignal) {
+        return { success: true, message: 'URL cambió y formulario desapareció (probable éxito)', url: currentUrl, pageState };
+      }
     }
 
-    // REGLA 5: Default → failure (conservador)
-    // Capturar texto de la página para diagnosticar errores ocultos
+    // REGLA 5: Default → failure (CONSERVADOR — prefiere falso negativo a falso positivo)
+    // Capturar texto de la página para diagnosticar qué pasó
     const bodySnippet = await page.evaluate(() => {
       return (document.body?.innerText || '').substring(0, 2000);
     }).catch(() => '');
