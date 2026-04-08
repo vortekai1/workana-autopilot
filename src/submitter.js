@@ -152,6 +152,10 @@ class ProposalSubmitter {
         await this.bm.randomDelay(2000, 3000);
       }
 
+      // 9b. Verificar que los campos se rellenaron correctamente en el estado del framework
+      const fieldValues = await this._verifyFormState(page);
+      log(`9b. Estado campos: ${JSON.stringify(fieldValues)}`);
+
       if (debug) screenshots.beforeSubmit = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
       // 10. Click en "Enviar propuesta/presupuesto"
@@ -166,7 +170,7 @@ class ProposalSubmitter {
       // 11. Esperar resultado — navegación O cambio en la página
       log('11. Esperando resultado (navegación o cambio en página)...');
       await Promise.race([
-        page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+        page.waitForNavigation({ timeout: 10000 }).catch(() => null),
         page.waitForFunction(
           () => {
             const text = document.body.innerText.toLowerCase();
@@ -174,11 +178,40 @@ class ProposalSubmitter {
               text.includes('felicitaciones') || text.includes('proposal sent') ||
               text.includes('especifique un alcance') || text.includes('campo obligatorio');
           },
-          { timeout: 15000 }
+          { timeout: 10000 }
         ).catch(() => null),
       ]);
-      // Dar tiempo extra para que la página estabilice
-      await this.bm.randomDelay(2000, 3000);
+      await this.bm.randomDelay(1500, 2500);
+
+      // 11b. Si la URL no cambió, intentar form.requestSubmit() como fallback
+      if (page.url() === formUrl) {
+        log('11b. URL no cambió tras click — intentando form.requestSubmit() como fallback...');
+        const requestSubmitResult = await page.evaluate(() => {
+          const form = document.querySelector('form');
+          if (form && typeof form.requestSubmit === 'function') {
+            try { form.requestSubmit(); return 'requestSubmit OK'; } catch (e) { return `requestSubmit error: ${e.message}`; }
+          }
+          if (form) {
+            try { form.submit(); return 'submit OK'; } catch (e) { return `submit error: ${e.message}`; }
+          }
+          return 'no form found';
+        });
+        log(`11b. Resultado fallback: ${requestSubmitResult}`);
+
+        // Esperar de nuevo navegación/cambio
+        await Promise.race([
+          page.waitForNavigation({ timeout: 10000 }).catch(() => null),
+          page.waitForFunction(
+            () => {
+              const text = document.body.innerText.toLowerCase();
+              return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
+                text.includes('especifique un alcance') || text.includes('campo obligatorio');
+            },
+            { timeout: 10000 }
+          ).catch(() => null),
+        ]);
+        await this.bm.randomDelay(2000, 3000);
+      }
 
       const finalUrl = page.url();
       log(`11. URL final: ${finalUrl}`);
@@ -189,6 +222,7 @@ class ProposalSubmitter {
       const result = await this._checkSubmissionResult(page, formUrl);
       result.elapsed_ms = Date.now() - startTime;
       result.formInfo = formInfo;
+      result.fieldValues = fieldValues;
       result.formUrl = formUrl;
       result.finalUrl = finalUrl;
       if (debug) result.screenshots = screenshots;
@@ -365,17 +399,15 @@ class ProposalSubmitter {
       for (const char of humanPart) {
         await page.keyboard.type(char, { delay: 20 + Math.random() * 40 });
       }
-      if (restPart) {
-        await textarea.evaluate((el, content) => {
-          el.value = el.value + content;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        }, restPart);
-      }
-      await textarea.evaluate(el => {
-        el.dispatchEvent(new Event('change', { bubbles: true }));
+      // Inyectar el texto completo usando native setter (compatible con React/Vue/Angular MFE)
+      // el.value = ... directo NO actualiza el estado del framework → submit falla silenciosamente
+      await textarea.evaluate((el, fullText) => {
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        nativeSetter.call(el, fullText);
         el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
         el.dispatchEvent(new Event('blur', { bubbles: true }));
-      });
+      }, text);
       return true;
     }
     return false;
@@ -452,25 +484,29 @@ class ProposalSubmitter {
   // =============================================
 
   async _fillTaskScopes(page) {
-    const count = await page.evaluate(() => {
-      // Workana tiene selects bid[task][N][scope] con opciones como "", "included", "extra"
-      // Necesitamos seleccionar la primera opción NO vacía para cada uno
-      const taskSelects = [...document.querySelectorAll('select[name*="bid[task]"][name*="[scope]"]')];
-      let filled = 0;
-      for (const sel of taskSelects) {
-        if (sel.value && sel.value !== '') continue; // Ya tiene valor
-        // Seleccionar la primera opción con valor no vacío
-        const validOption = [...sel.options].find(o => o.value && o.value !== '');
-        if (validOption) {
-          sel.value = validOption.value;
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-          sel.dispatchEvent(new Event('input', { bubbles: true }));
-          filled++;
-        }
-      }
-      return filled;
+    // Obtener nombres de selects sin valor + primera opción válida para cada uno
+    const scopeData = await page.evaluate(() => {
+      return [...document.querySelectorAll('select[name*="bid[task]"][name*="[scope]"]')]
+        .filter(sel => !sel.value || sel.value === '')
+        .map(sel => {
+          const validOpt = [...sel.options].find(o => o.value && o.value !== '');
+          return { name: sel.name, value: validOpt ? validOpt.value : null };
+        })
+        .filter(d => d.value !== null);
     });
-    return count;
+
+    // Usar page.select() nativo de Puppeteer (compatible con cualquier framework MFE)
+    // sel.value = ... directo NO actualiza el estado del framework → submit falla silenciosamente
+    let filled = 0;
+    for (const { name, value } of scopeData) {
+      try {
+        await page.select(`select[name="${name}"]`, value);
+        filled++;
+      } catch (e) {
+        console.log(`[Submitter] Error en scope ${name}: ${e.message}`);
+      }
+    }
+    return filled;
   }
 
   // =============================================
@@ -700,7 +736,47 @@ class ProposalSubmitter {
     }
 
     // REGLA 5: Default → failure (conservador)
-    return { success: false, message: 'No se pudo confirmar el envío', url: currentUrl, pageState };
+    // Capturar texto de la página para diagnosticar errores ocultos
+    const bodySnippet = await page.evaluate(() => {
+      return (document.body?.innerText || '').substring(0, 2000);
+    }).catch(() => '');
+    return { success: false, message: 'No se pudo confirmar el envío', url: currentUrl, pageState, bodySnippet };
+  }
+
+  // =============================================
+  // VERIFICAR ESTADO DE CAMPOS DESPUÉS DE RELLENAR
+  // =============================================
+
+  async _verifyFormState(page) {
+    return page.evaluate(() => {
+      const result = {};
+
+      // Textarea (propuesta)
+      const textarea = document.querySelector('textarea[name="bid[content]"]') ||
+        [...document.querySelectorAll('textarea')].find(t => t.offsetHeight > 20);
+      result.proposalText = textarea ? textarea.value.substring(0, 100) + (textarea.value.length > 100 ? '...' : '') : 'NO ENCONTRADO';
+      result.proposalLength = textarea ? textarea.value.length : 0;
+
+      // Budget
+      const amountInput = document.querySelector('input[name="bid[amount]"]');
+      result.budgetAmount = amountInput ? amountInput.value : 'NO ENCONTRADO';
+
+      // Hourly rate
+      const hoursInput = document.querySelector('input[name="bid[hours]"]');
+      result.hourlyRate = hoursInput ? hoursInput.value : 'NO ENCONTRADO';
+
+      // Task scopes
+      const scopes = [...document.querySelectorAll('select[name*="bid[task]"][name*="[scope]"]')];
+      result.taskScopesTotal = scopes.length;
+      result.taskScopesFilled = scopes.filter(s => s.value && s.value !== '').length;
+      result.taskScopesEmpty = scopes.filter(s => !s.value || s.value === '').length;
+
+      // Skills (checkboxes marcados)
+      const checkedSkills = [...document.querySelectorAll('input[type="checkbox"]:checked')];
+      result.skillsSelected = checkedSkills.length;
+
+      return result;
+    });
   }
 
   // =============================================
