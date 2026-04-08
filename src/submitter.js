@@ -144,6 +144,7 @@ class ProposalSubmitter {
         .map(i => ({
           type: i.type, name: i.name || i.id || '?',
           placeholder: (i.placeholder || '').substring(0, 60),
+          value: (i.value || '').substring(0, 60),
           required: i.required,
         }));
 
@@ -243,42 +244,32 @@ class ProposalSubmitter {
   }
 
   async _fillBudget(page, budget) {
+    // Workana usa bid[amount] como campo principal de presupuesto (required)
     const selectors = [
-      'input[name*="total"]', 'input[name*="budget"]', 'input[name*="amount"]',
-      'input[name*="price"]', 'input[name*="value"]', 'input[name*="cost"]',
-      'input[name*="bid"]',
+      'input[name="bid[amount]"]',         // Nombre exacto Workana
+      'input[name*="amount"]',
+      'input[name*="total"]',
+      'input[name*="budget"]',
+      'input[name*="price"]',
     ];
     for (const sel of selectors) {
       const input = await page.$(sel);
       if (input) {
-        const visible = await page.evaluate(el => el.offsetHeight > 5, input);
-        if (!visible) continue;
-        console.log(`[Submitter] Budget input: ${sel}`);
+        const info = await page.evaluate(el => ({
+          visible: el.offsetHeight > 5,
+          name: el.name,
+          type: el.type,
+          currentValue: el.value,
+        }), input);
+        if (!info.visible) continue;
+        console.log(`[Submitter] Budget input: ${sel} (name=${info.name}, current=${info.currentValue})`);
         await input.click({ clickCount: 3 });
         await this.bm.randomDelay(200, 400);
         await input.type(String(budget), { delay: 40 + Math.random() * 40 });
         await input.evaluate(el => {
-          el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('input', { bubbles: true }));
-        });
-        return true;
-      }
-    }
-
-    // Fallback: input type=number
-    const numberInputs = await page.$$('input[type="number"]');
-    for (const input of numberInputs) {
-      const info = await page.evaluate(el => ({
-        visible: el.offsetHeight > 5,
-        name: (el.name || el.id || '').toLowerCase(),
-      }), input);
-      if (info.visible && !info.name.includes('day') && !info.name.includes('delivery')) {
-        console.log(`[Submitter] Budget fallback: input[type=number] ${info.name}`);
-        await input.click({ clickCount: 3 });
-        await input.type(String(budget), { delay: 40 + Math.random() * 40 });
-        await input.evaluate(el => {
           el.dispatchEvent(new Event('change', { bubbles: true }));
-          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
         });
         return true;
       }
@@ -288,40 +279,35 @@ class ProposalSubmitter {
   }
 
   async _fillDeliveryDays(page, days) {
+    // Workana usa bid[deliveryTime] con placeholder "Ejemplo: 2 días o 3 horas"
     const selectors = [
-      'input[name*="days"]', 'input[name*="delivery"]', 'input[name*="deadline"]',
-      'input[name*="time"]', 'input[name*="plazo"]', 'input[name*="duration"]',
+      'input[name="bid[deliveryTime]"]',    // Nombre exacto Workana
+      'input[name*="delivery"]',
+      'input[name*="days"]',
+      'input[name*="plazo"]',
     ];
     for (const sel of selectors) {
       const el = await page.$(sel);
       if (el) {
-        console.log(`[Submitter] Delivery input: ${sel}`);
+        const info = await page.evaluate(e => ({
+          visible: e.offsetHeight > 5, name: e.name, value: e.value,
+        }), el);
+        if (!info.visible) continue;
+        console.log(`[Submitter] Delivery input: ${sel} (name=${info.name})`);
         await el.click({ clickCount: 3 });
-        await el.type(String(days), { delay: 40 + Math.random() * 40 });
-        await el.evaluate(e => { e.dispatchEvent(new Event('change', { bubbles: true })); });
+        await this.bm.randomDelay(200, 300);
+        // Escribir en formato legible "X días"
+        const text = `${days} días`;
+        await el.type(text, { delay: 40 + Math.random() * 40 });
+        await el.evaluate(e => {
+          e.dispatchEvent(new Event('input', { bubbles: true }));
+          e.dispatchEvent(new Event('change', { bubbles: true }));
+        });
         return true;
       }
     }
-
-    // Buscar por placeholder
-    const found = await page.evaluate((d) => {
-      const inputs = [...document.querySelectorAll('input')];
-      const el = inputs.find(i => {
-        const ph = (i.placeholder || '').toLowerCase();
-        return ph.includes('día') || ph.includes('day') || ph.includes('hora') || ph.includes('plazo');
-      });
-      if (el) {
-        el.focus();
-        el.value = String(d);
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }
-      return false;
-    }, days);
-    if (found) console.log('[Submitter] Delivery: encontrado por placeholder');
-    else console.log('[Submitter] Delivery: no encontrado');
-    return found;
+    console.log('[Submitter] Delivery: no encontrado');
+    return false;
   }
 
   async _clickSubmitButton(page) {
@@ -329,47 +315,69 @@ class ProposalSubmitter {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await this.bm.randomDelay(1000, 2000);
 
-    // Buscar el botón "Enviar propuesta" (submit del formulario)
+    // Debug: listar todos los candidatos submit
     const btnInfo = await page.evaluate(() => {
-      const allClickable = [...document.querySelectorAll('button, input[type="submit"], a')];
-      const candidates = allClickable.map(el => ({
+      const all = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')];
+      return all.filter(el => el.offsetHeight > 0).map(el => ({
         tag: el.tagName,
-        text: (el.textContent || el.value || '').trim().substring(0, 80),
         type: el.type || '',
-        href: el.href || '',
-        visible: el.offsetHeight > 0 && el.offsetWidth > 0,
-      })).filter(c => c.visible && /(enviar|submit|send)/i.test(c.text));
-      return candidates;
+        text: (el.textContent || '').trim().substring(0, 60),
+        value: (el.value || '').substring(0, 60),
+        visible: el.offsetHeight > 0,
+      }));
     });
-    console.log(`[Submitter] Submit candidates: ${JSON.stringify(btnInfo)}`);
+    console.log(`[Submitter] All clickable: ${JSON.stringify(btnInfo)}`);
 
-    // Click el primer candidato que coincida con "enviar propuesta"
     const clicked = await page.evaluate(() => {
-      const allClickable = [...document.querySelectorAll('button, input[type="submit"], a')];
+      // Helper: obtener texto visible de un elemento (textContent para buttons, value para inputs)
+      const getText = (el) => {
+        const tc = (el.textContent || '').trim().toLowerCase();
+        const val = (el.value || '').trim().toLowerCase();
+        return tc || val;
+      };
 
-      // Primero: match exacto "enviar propuesta"
+      const allClickable = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')];
+
+      // 1. Match exacto "enviar propuesta" (por textContent O value)
       let btn = allClickable.find(el => {
-        const text = (el.textContent || el.value || '').trim().toLowerCase();
+        const text = getText(el);
         return el.offsetHeight > 0 && (text === 'enviar propuesta' || text === 'send proposal');
       });
 
-      // Fallback: contiene "enviar"
+      // 2. Fallback: contiene "enviar propuesta" en textContent O value
       if (!btn) {
         btn = allClickable.find(el => {
-          const text = (el.textContent || el.value || '').trim().toLowerCase();
-          return el.offsetHeight > 0 && el.tagName === 'BUTTON' && text.includes('enviar');
+          const tc = (el.textContent || '').trim().toLowerCase();
+          const val = (el.value || '').trim().toLowerCase();
+          return el.offsetHeight > 0 && (tc.includes('enviar propuesta') || val.includes('enviar propuesta'));
+        });
+      }
+
+      // 3. Fallback: input[type="submit"] visible (Workana usa input, no button)
+      if (!btn) {
+        btn = document.querySelector('input[type="submit"]');
+        if (btn && btn.offsetHeight === 0) btn = null;
+      }
+
+      // 4. Fallback: cualquier elemento con "enviar" visible
+      if (!btn) {
+        btn = allClickable.find(el => {
+          const tc = (el.textContent || '').trim().toLowerCase();
+          const val = (el.value || '').trim().toLowerCase();
+          return el.offsetHeight > 0 && (tc.includes('enviar') || val.includes('enviar'));
         });
       }
 
       if (btn) {
         btn.scrollIntoView({ block: 'center' });
         btn.click();
-        return true;
+        return { clicked: true, tag: btn.tagName, type: btn.type, text: (btn.textContent || '').trim().substring(0, 40), value: (btn.value || '').substring(0, 40) };
       }
-      return false;
+      return { clicked: false };
     });
 
-    return clicked;
+    console.log(`[Submitter] Submit result: ${JSON.stringify(clicked)}`);
+    return clicked.clicked;
   }
 
   async _checkSubmissionResult(page, formUrl) {
