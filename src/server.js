@@ -133,6 +133,121 @@ app.post('/submit-proposal', async (req, res) => {
   }
 });
 
+// Debug: analizar formulario de propuesta sin enviar
+app.get('/debug-form', async (req, res) => {
+  const page = await browserManager.newPage();
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'url requerida' });
+
+    // 1. Navegar al proyecto
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await browserManager.randomDelay(2000, 3000);
+    await page.waitForFunction(() => document.body.innerText.length > 500, { timeout: 15000 }).catch(() => {});
+
+    const projectUrl = page.url();
+
+    // 2. Buscar y clickar botón de propuesta
+    let applyClicked = false;
+    const textPatterns = ['Enviar una propuesta', 'Enviar propuesta', 'Send a proposal'];
+    for (const text of textPatterns) {
+      applyClicked = await page.evaluate(txt => {
+        const el = [...document.querySelectorAll('a, button')].find(e =>
+          e.textContent?.trim().toLowerCase().includes(txt.toLowerCase())
+        );
+        if (el) { el.click(); return true; }
+        return false;
+      }, text);
+      if (applyClicked) break;
+    }
+
+    if (!applyClicked) {
+      const screenshot = await page.screenshot({ encoding: 'base64' });
+      return res.json({ error: 'No se encontró botón de propuesta', projectUrl, screenshot });
+    }
+
+    // 3. Esperar formulario
+    await browserManager.randomDelay(3000, 5000);
+    await page.waitForFunction(() => document.querySelectorAll('textarea').length > 0, { timeout: 15000 }).catch(() => {});
+    await browserManager.randomDelay(1000, 2000);
+
+    const formUrl = page.url();
+
+    // 4. Analizar TODOS los elementos del formulario
+    const formAnalysis = await page.evaluate(() => {
+      const result = {};
+
+      // Textareas
+      result.textareas = [...document.querySelectorAll('textarea')].map(t => ({
+        name: t.name || t.id || '(sin nombre)',
+        placeholder: (t.placeholder || '').substring(0, 100),
+        rows: t.rows,
+        visible: t.getBoundingClientRect().height > 10,
+        value_length: (t.value || '').length,
+      }));
+
+      // Inputs
+      result.inputs = [...document.querySelectorAll('input')].map(i => ({
+        type: i.type,
+        name: i.name || i.id || '(sin nombre)',
+        placeholder: (i.placeholder || '').substring(0, 100),
+        value: (i.value || '').substring(0, 50),
+        required: i.required,
+        visible: i.getBoundingClientRect().height > 10 && i.getBoundingClientRect().width > 10,
+      })).filter(i => i.type !== 'hidden');
+
+      // Selects
+      result.selects = [...document.querySelectorAll('select')].map(s => ({
+        name: s.name || s.id || '(sin nombre)',
+        options: [...s.options].map(o => o.value + ':' + o.text.trim()).slice(0, 10),
+        required: s.required,
+        selectedValue: s.value,
+      }));
+
+      // Buttons
+      result.buttons = [...document.querySelectorAll('button')].map(b => ({
+        text: (b.textContent || '').trim().substring(0, 80),
+        type: b.type,
+        disabled: b.disabled,
+        className: (b.className || '').substring(0, 80),
+      })).filter(b => b.text.length > 0);
+
+      // Forms
+      result.forms = [...document.querySelectorAll('form')].map(f => ({
+        action: f.action || '(sin action)',
+        method: f.method,
+        id: f.id || '(sin id)',
+        className: (f.className || '').substring(0, 80),
+      }));
+
+      // Links con texto relevante
+      result.relevantLinks = [...document.querySelectorAll('a')].filter(a =>
+        /(enviar|submit|propuesta|proposal|bid)/i.test(a.textContent || '') ||
+        /(enviar|submit|propuesta|proposal|bid)/i.test(a.href || '')
+      ).map(a => ({
+        text: (a.textContent || '').trim().substring(0, 80),
+        href: (a.href || '').substring(0, 150),
+      }));
+
+      return result;
+    });
+
+    // 5. Screenshot del formulario
+    const screenshot = await page.screenshot({ encoding: 'base64' });
+
+    res.json({
+      projectUrl,
+      formUrl,
+      formAnalysis,
+      screenshot,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  } finally {
+    await page.close();
+  }
+});
+
 // Verificar sesión (navega al dashboard y verifica)
 app.get('/session-check', async (req, res) => {
   try {
