@@ -119,14 +119,14 @@ app.get('/project-details', async (req, res) => {
 // Enviar propuesta
 app.post('/submit-proposal', async (req, res) => {
   try {
-    const { url, text, budget, delivery_days } = req.body;
+    const { url, text, budget, delivery_days, debug } = req.body;
     if (!url || !text) {
       return res.status(400).json({
         success: false,
         error: 'URL y texto de propuesta requeridos',
       });
     }
-    const result = await submitter.submit(url, text, budget, delivery_days);
+    const result = await submitter.submit(url, text, budget, delivery_days, debug);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -140,10 +140,12 @@ app.get('/debug-form', async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: 'url requerida' });
 
-    // 1. Navegar al proyecto
+    // 1. Navegar al proyecto y esperar MFE completo
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    await browserManager.randomDelay(2000, 3000);
+    await browserManager.randomDelay(3000, 5000);
     await page.waitForFunction(() => document.body.innerText.length > 500, { timeout: 15000 }).catch(() => {});
+    // Esperar extra para que MFE renderice botones
+    await browserManager.randomDelay(3000, 5000);
 
     const projectUrl = page.url();
 
