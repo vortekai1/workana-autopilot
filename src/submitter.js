@@ -95,20 +95,39 @@ class ProposalSubmitter {
       }
       await this.bm.randomDelay(1000, 2000);
 
-      // 6. Seleccionar habilidades visibles (hasta 5, sin abrir desplegable)
-      const skillsSelected = await this._selectSkills(page);
-      log(`6. Habilidades seleccionadas: ${skillsSelected}`);
-      await this.bm.randomDelay(800, 1500);
-
-      // 7. Seleccionar proyectos del portfolio (hasta 3, botón +)
-      const portfolioSelected = await this._selectPortfolioProjects(page);
-      log(`7. Proyectos portfolio seleccionados: ${portfolioSelected}`);
-      await this.bm.randomDelay(800, 1500);
-
-      // 8. Rellenar presupuesto (Valor total o 40 si es por horas)
+      // 6. Rellenar presupuesto (Valor total o 40 si es por horas)
       const budgetFilled = await this._fillBudget(page, budget);
-      log(`8. Presupuesto: ${budgetFilled}`);
+      log(`6. Presupuesto: ${budgetFilled}`);
       await this.bm.randomDelay(800, 1500);
+
+      // Verificar que seguimos en el formulario
+      if (page.url() !== formUrl) {
+        log(`⚠️ URL cambió tras presupuesto: ${page.url()}`);
+        if (debug) screenshots.urlChanged = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+        return { success: false, message: `Navegación inesperada tras presupuesto: ${page.url()}`, elapsed_ms: Date.now() - startTime, formInfo, screenshots: debug ? screenshots : undefined };
+      }
+
+      // 7. Seleccionar habilidades visibles (hasta 5, sin abrir desplegable)
+      const skillsSelected = await this._selectSkills(page);
+      log(`7. Habilidades seleccionadas: ${skillsSelected}`);
+      await this.bm.randomDelay(800, 1500);
+
+      // Verificar que seguimos en el formulario
+      if (page.url() !== formUrl) {
+        log(`⚠️ URL cambió tras habilidades: ${page.url()}`);
+        return { success: false, message: `Navegación inesperada tras habilidades: ${page.url()}`, elapsed_ms: Date.now() - startTime, formInfo };
+      }
+
+      // 8. Seleccionar proyectos del portfolio (hasta 3, botón +)
+      const portfolioSelected = await this._selectPortfolioProjects(page);
+      log(`8. Proyectos portfolio seleccionados: ${portfolioSelected}`);
+      await this.bm.randomDelay(800, 1500);
+
+      // Verificar que seguimos en el formulario
+      if (page.url() !== formUrl) {
+        log(`⚠️ URL cambió tras portfolio: ${page.url()}`);
+        return { success: false, message: `Navegación inesperada tras portfolio: ${page.url()}`, elapsed_ms: Date.now() - startTime, formInfo };
+      }
 
       // NO rellenamos delivery time (no obligatorio)
 
@@ -347,60 +366,21 @@ class ProposalSubmitter {
 
   async _selectSkills(page) {
     const count = await page.evaluate(() => {
-      // Buscar chips/botones de habilidades que sean clickables
-      // Workana muestra habilidades como tags/chips con checkbox o botón
-      const skillElements = [];
-
-      // Patrón 1: checkboxes de habilidades
+      // Solo checkboxes de habilidades — lo más seguro
       const checkboxes = [...document.querySelectorAll('input[type="checkbox"]')]
         .filter(cb => {
-          // Solo los que estén en la zona de habilidades (no en otras secciones)
-          const parent = cb.closest('[class*="skill"], [class*="habilidad"], [class*="tag"]');
-          const label = cb.parentElement;
-          return cb.offsetHeight > 0 || (label && label.offsetHeight > 0);
+          const label = cb.closest('label') || cb.parentElement;
+          return !cb.checked && (cb.offsetHeight > 0 || (label && label.offsetHeight > 0));
         });
 
-      if (checkboxes.length > 0) {
-        // Click en las primeras 5 visibles no marcadas
-        let clicked = 0;
-        for (const cb of checkboxes) {
-          if (clicked >= 5) break;
-          if (cb.checked) continue;
-          const label = cb.closest('label') || cb.parentElement;
-          if (label && label.offsetHeight > 0) {
-            label.click();
-            clicked++;
-          }
-        }
-        return clicked;
-      }
-
-      // Patrón 2: botones/spans clickables con texto de habilidad
-      // Buscar sección "Destaca tus habilidades" y sus elementos clickables
-      const allElements = [...document.querySelectorAll('button, span, div, label, a')];
-      const skillSection = document.body.innerText.indexOf('Destaca tus habilidades');
-      if (skillSection === -1) return 0;
-
-      // Buscar elementos tipo "tag/chip" que no estén ya seleccionados
-      const chips = allElements.filter(el => {
-        if (el.offsetHeight === 0 || el.offsetWidth === 0) return false;
-        const rect = el.getBoundingClientRect();
-        // Chips suelen ser pequeños (20-50px de alto)
-        if (rect.height < 15 || rect.height > 60) return false;
-        if (rect.width < 30 || rect.width > 300) return false;
-        // Verificar que tiene texto corto (nombre de habilidad)
-        const text = (el.textContent || '').trim();
-        if (text.length < 1 || text.length > 40) return false;
-        // No seleccionar botones genéricos
-        if (/buscar|agregar|enviar|cancelar|aceptar|cookie/i.test(text)) return false;
-        return true;
-      });
-
-      // Intentar clickar los primeros chips de habilidades
       let clicked = 0;
-      for (const chip of chips.slice(0, 5)) {
-        chip.click();
-        clicked++;
+      for (const cb of checkboxes) {
+        if (clicked >= 5) break;
+        const label = cb.closest('label') || cb.parentElement;
+        if (label && label.offsetHeight > 0) {
+          label.click();
+          clicked++;
+        }
       }
       return clicked;
     });
@@ -415,36 +395,25 @@ class ProposalSubmitter {
   async _selectPortfolioProjects(page) {
     // Scroll a la sección de portfolio para que sea visible
     await page.evaluate(() => {
-      const text = document.body.innerText;
-      const idx = text.indexOf('Destaca tus proyectos');
-      if (idx > -1) {
-        // Buscar el heading y scrollear a él
-        const headings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, div')];
-        const heading = headings.find(h => h.textContent?.includes('Destaca tus proyectos'));
-        if (heading) heading.scrollIntoView({ block: 'center' });
-      }
+      const headings = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, span, div')];
+      const heading = headings.find(h => h.textContent?.includes('Destaca tus proyectos'));
+      if (heading) heading.scrollIntoView({ block: 'center' });
     });
     await this.bm.randomDelay(500, 1000);
 
     const count = await page.evaluate(() => {
-      // Buscar botones "+" en las tarjetas de portfolio
-      // Workana muestra hasta 6 proyectos con un botón "+" para seleccionar
-      const addButtons = [...document.querySelectorAll('button, a, [role="button"], span')]
+      // SEGURO: Solo buscar elementos que NO sean button[type="submit"]
+      // para evitar enviar el formulario accidentalmente
+      const addButtons = [...document.querySelectorAll('a, span, div, [role="button"]')]
         .filter(el => {
+          // NUNCA clickar button[type=submit]
+          if (el.tagName === 'BUTTON') return false;
           if (el.offsetHeight === 0 || el.offsetWidth === 0) return false;
           const text = (el.textContent || '').trim();
-          // Botón "+" o "Agregar" dentro de cards de portfolio
-          if (text === '+' || text === 'Seleccionar' || text === 'Select') return true;
-          // También buscar SVG de "+" dentro del elemento
-          if (el.querySelector('svg') && text === '') {
-            const rect = el.getBoundingClientRect();
-            // Botones pequeños tipo "+" suelen ser <50px
-            if (rect.width < 60 && rect.height < 60) return true;
-          }
+          if (text === '+') return true;
           return false;
         });
 
-      // Click en las primeras 3
       let clicked = 0;
       for (const btn of addButtons) {
         if (clicked >= 3) break;
