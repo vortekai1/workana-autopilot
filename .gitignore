@@ -1,0 +1,30 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (secretos)
+.env
+!.env.example
+
+# Chrome session data
+chrome-data/
+
+# Debug screenshots
+debug-*.png
+
+# Supabase CLI temp
+supabase/.temp/
+
+# MCP config local
+.mcp.json
+
+# Dashboard build (se despliega vía SFTP)
+dashboard/dist/
+dashboard/package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

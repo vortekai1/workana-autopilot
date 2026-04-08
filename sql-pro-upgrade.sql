@@ -29,8 +29,9 @@ CREATE INDEX IF NOT EXISTS idx_projects_win_prob ON workana_projects(win_probabi
 CREATE INDEX IF NOT EXISTS idx_projects_outcome ON workana_projects(outcome) WHERE outcome IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_projects_budget_range ON workana_projects(budget_min, budget_max) WHERE budget_min IS NOT NULL;
 
--- Vista: Conversión enriquecida v2
-CREATE OR REPLACE VIEW workana_conversion_stats_v2 AS
+-- Vista: Conversión enriquecida v2 (security_invoker para respetar RLS)
+CREATE OR REPLACE VIEW workana_conversion_stats_v2
+WITH (security_invoker = true) AS
 SELECT
   category,
   COUNT(*) FILTER (WHERE status IN ('sent', 'applied')) AS total_sent,
@@ -50,8 +51,9 @@ FROM workana_projects
 WHERE status IN ('sent', 'applied', 'won', 'lost')
 GROUP BY category;
 
--- Vista: Patrones de propuestas ganadoras
-CREATE OR REPLACE VIEW workana_winning_patterns AS
+-- Vista: Patrones de propuestas ganadoras (security_invoker para respetar RLS)
+CREATE OR REPLACE VIEW workana_winning_patterns
+WITH (security_invoker = true) AS
 SELECT
   p.category,
   pr.tone,
@@ -71,8 +73,9 @@ WHERE p.outcome IN ('won', 'lost')
 ORDER BY p.updated_at DESC
 LIMIT 100;
 
--- Vista: Resultados A/B Testing
-CREATE OR REPLACE VIEW workana_ab_results AS
+-- Vista: Resultados A/B Testing (security_invoker para respetar RLS)
+CREATE OR REPLACE VIEW workana_ab_results
+WITH (security_invoker = true) AS
 SELECT
   pr.proposal_variant,
   COUNT(*) AS total,
