@@ -107,40 +107,14 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{$json.config.PUPPETEER_URL}}/project-details",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "url",
-              "value": "={{$json.url}}"
-            }
-          ]
-        }
+        "jsCode": "// Obtener detalles del proyecto via Puppeteer y combinar con datos del scraping\n// (Nodo unificado para evitar problemas de paired-items en n8n)\nconst basic = $input.first().json;\nconst config = basic.config;\n\nconsole.log(`[Obtener Detalles] Procesando: ${basic.title}`);\n\n// 1. Fetch detalles del proyecto\nlet detailsResponse;\ntry {\n  const resp = await fetch(\n    `${config.PUPPETEER_URL}/project-details?url=${encodeURIComponent(basic.url)}`,\n    { signal: AbortSignal.timeout(30000) }\n  );\n  detailsResponse = await resp.json();\n} catch (error) {\n  console.log(`[Obtener Detalles] Error fetch: ${error.message}`);\n  detailsResponse = { success: false, error: error.message };\n}\n\nif (!detailsResponse.success) {\n  console.log(`[Obtener Detalles] Error detalles: ${detailsResponse.error} → continuando con datos básicos`);\n  // Continuar con datos básicos en vez de parar\n  return [{ json: { ...basic, details_error: true } }];\n}\n\nconst details = detailsResponse.details;\n\n// 2. Parsear presupuesto de texto a números\nfunction parseBudget(text) {\n  if (!text) return { min: null, max: null, currency: 'USD', type: 'open' };\n  const t = text.replace(/\\s+/g, ' ').trim();\n  let currency = 'USD';\n  if (/EUR|€/i.test(t)) currency = 'EUR';\n  if (/hora|hour|hr/i.test(t)) {\n    const match = t.match(/(\\d+[\\.,]?\\d*)/);\n    const val = match ? parseFloat(match[1].replace(',', '.')) : null;\n    return { min: val, max: val, currency, type: 'hourly' };\n  }\n  const rangeMatch = t.match(/(\\d+[\\.,]?\\d*)\\s*[-–a]\\s*(\\d+[\\.,]?\\d*)/);\n  if (rangeMatch) {\n    return { min: parseFloat(rangeMatch[1].replace(',', '.')), max: parseFloat(rangeMatch[2].replace(',', '.')), currency, type: 'fixed' };\n  }\n  const singleMatch = t.match(/(\\d+[\\.,]?\\d*)/);\n  if (singleMatch) {\n    const val = parseFloat(singleMatch[1].replace(',', '.'));\n    return { min: val, max: val, currency, type: 'fixed' };\n  }\n  return { min: null, max: null, currency, type: 'open' };\n}\n\n// 3. Extraer número de propuestas\nconst proposalsText = details.proposals || basic.proposals_text || '';\nconst proposalsMatch = proposalsText.match(/(\\d+)/);\nconst proposalsCount = proposalsMatch ? parseInt(proposalsMatch[1]) : 0;\n\n// 4. Filtrar por número de propuestas\nconst maxProposals = parseInt(config.MAX_PROPOSALS_ON_PROJECT) || 50;\nif (proposalsCount > maxProposals) {\n  console.log(`[Obtener Detalles] ⛔ Demasiadas propuestas (${proposalsCount}>${maxProposals}): ${basic.title}`);\n  return [];\n}\n\nconst budgetParsed = parseBudget(details.budget || basic.budget_text);\n\nconsole.log(`[Obtener Detalles] ✅ ${basic.title} | Props: ${proposalsCount} | Budget: ${budgetParsed.min}-${budgetParsed.max} ${budgetParsed.currency}`);\n\nreturn [{\n  json: {\n    ...basic,\n    full_description: details.description || basic.description,\n    full_title: details.title || basic.title,\n    budget_detail: details.budget || basic.budget_text,\n    budget_min: budgetParsed.min,\n    budget_max: budgetParsed.max,\n    budget_currency: budgetParsed.currency,\n    budget_type: budgetParsed.type,\n    category: details.category || basic.category || '',\n    deadline: details.deadline || '',\n    skills_detail: details.skills && details.skills.length > 0 ? details.skills : basic.skills,\n    proposals_count: proposalsCount,\n    client_name: details.client?.name || '',\n    client_country: details.client?.country || '',\n    client_rating: details.client?.rating || '',\n    client_verified: details.client?.verified || false,\n    client_projects_posted: details.client?.projects_posted || null,\n    client_hire_rate: details.client?.hire_rate || null,\n    publish_date: details.publish_date || basic.date_text || '',\n    full_text: details.full_text || '',\n  }\n}];"
       },
       "id": "get-details",
       "name": "Obtener Detalles",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2040,
-        0
-      ],
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 3000
-    },
-    {
-      "parameters": {
-        "jsCode": "// Combinar datos del scraping con los detalles completos\nconst basic = $('Filtrar Nuevos').item.json;\nconst detailsResponse = $input.first().json;\n\nif (!detailsResponse.success) {\n  console.log(`Error obteniendo detalles: ${detailsResponse.error}`);\n  return [{ json: { ...basic, details_error: true } }];\n}\n\nconst details = detailsResponse.details;\n\n// Parsear presupuesto de texto a números\nfunction parseBudget(text) {\n  if (!text) return { min: null, max: null, currency: 'USD', type: 'open' };\n  const t = text.replace(/\\s+/g, ' ').trim();\n  let currency = 'USD';\n  if (/EUR|€/i.test(t)) currency = 'EUR';\n  if (/hora|hour|hr/i.test(t)) {\n    const match = t.match(/(\\d+[\\.,]?\\d*)/);\n    const val = match ? parseFloat(match[1].replace(',', '.')) : null;\n    return { min: val, max: val, currency, type: 'hourly' };\n  }\n  const rangeMatch = t.match(/(\\d+[\\.,]?\\d*)\\s*[-–a]\\s*(\\d+[\\.,]?\\d*)/);\n  if (rangeMatch) {\n    return { min: parseFloat(rangeMatch[1].replace(',', '.')), max: parseFloat(rangeMatch[2].replace(',', '.')), currency, type: 'fixed' };\n  }\n  const singleMatch = t.match(/(\\d+[\\.,]?\\d*)/);\n  if (singleMatch) {\n    const val = parseFloat(singleMatch[1].replace(',', '.'));\n    return { min: val, max: val, currency, type: 'fixed' };\n  }\n  return { min: null, max: null, currency, type: 'open' };\n}\n\n// Extraer número de propuestas\nconst proposalsText = details.proposals || basic.proposals_text || '';\nconst proposalsMatch = proposalsText.match(/(\\d+)/);\nconst proposalsCount = proposalsMatch ? parseInt(proposalsMatch[1]) : 0;\n\n// Filtrar por número de propuestas\nconst maxProposals = basic.config.MAX_PROPOSALS_ON_PROJECT || 30;\nif (proposalsCount > maxProposals) {\n  console.log(`Demasiadas propuestas (${proposalsCount}): ${basic.title}`);\n  return [];\n}\n\nconst budgetParsed = parseBudget(details.budget || basic.budget_text);\n\nreturn [{\n  json: {\n    ...basic,\n    full_description: details.description || basic.description,\n    full_title: details.title || basic.title,\n    budget_detail: details.budget || basic.budget_text,\n    budget_min: budgetParsed.min,\n    budget_max: budgetParsed.max,\n    budget_currency: budgetParsed.currency,\n    budget_type: budgetParsed.type,\n    category: details.category || basic.category || '',\n    deadline: details.deadline || '',\n    skills_detail: details.skills && details.skills.length > 0 ? details.skills : basic.skills,\n    proposals_count: proposalsCount,\n    client_name: details.client?.name || '',\n    client_country: details.client?.country || '',\n    client_rating: details.client?.rating || '',\n    client_verified: details.client?.verified || false,\n    client_projects_posted: details.client?.projects_posted || null,\n    client_hire_rate: details.client?.hire_rate || null,\n    publish_date: details.publish_date || basic.date_text || '',\n    full_text: details.full_text || '',\n  }\n}];"
-      },
-      "id": "merge-data",
-      "name": "Combinar Datos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2260,
+        2040,
         0
       ]
     },
@@ -153,7 +127,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2370,
+        2480,
         0
       ]
     },
@@ -181,7 +155,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2590,
+        2700,
         0
       ],
       "retryOnFail": true,
@@ -196,7 +170,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parsear respuesta de la IA y estructurar datos\n// SIEMPRE devuelve datos para guardar en DB (evita reprocesar proyectos)\nconst aiResponse = $input.first().json;\nconst projectData = $('Combinar Datos').item.json;\n\n// Helper para construir objeto proyecto\nfunction buildProject(overrides) {\n  return {\n    workana_url: projectData.url,\n    title: projectData.full_title || projectData.title,\n    description: (projectData.full_description || projectData.description || '').substring(0, 2000),\n    category: projectData.category || '',\n    budget_text: projectData.budget_detail || projectData.budget_text || '',\n    skills: projectData.skills_detail || projectData.skills || [],\n    client_name: projectData.client_name || '',\n    client_country: projectData.client_country || '',\n    client_rating: parseFloat(projectData.client_rating) || null,\n    client_verified: projectData.client_verified || false,\n    proposals_count: projectData.proposals_count || 0,\n    publication_date: projectData.publish_date || '',\n    pre_score: projectData.pre_score || 0,\n    budget_min: projectData.budget_min || null,\n    budget_max: projectData.budget_max || null,\n    budget_currency: projectData.budget_currency || 'EUR',\n    budget_type: projectData.budget_type || 'fixed',\n    proposals_count_parsed: parseInt(projectData.proposals_count) || null,\n    client_rating_parsed: parseFloat(projectData.client_rating) || null,\n    client_projects_posted: projectData.client_projects_posted || null,\n    client_hire_rate: projectData.client_hire_rate || null,\n    ...overrides,\n  };\n}\n\n// Si OpenAI devolvió error\nif (aiResponse.error) {\n  console.error('OpenAI ERROR:', JSON.stringify(aiResponse.error));\n  return [{\n    json: {\n      should_apply: false,\n      project: buildProject({\n        relevance_score: 0,\n        red_flags: ['Error en IA: ' + (aiResponse.error?.message || 'desconocido')],\n        status: 'new',\n      }),\n      proposal: null,\n      config: projectData.config,\n    }\n  }];\n}\n\nlet proposal;\ntry {\n  const content = aiResponse.choices?.[0]?.message?.content;\n  if (!content) {\n    console.error('NO CONTENT in AI response');\n    return [{\n      json: {\n        should_apply: false,\n        project: buildProject({ relevance_score: 0, red_flags: ['Sin respuesta de IA'], status: 'new' }),\n        proposal: null,\n        config: projectData.config,\n      }\n    }];\n  }\n  proposal = JSON.parse(content);\n} catch (e) {\n  console.error('JSON PARSE ERROR:', e.message);\n  return [{\n    json: {\n      should_apply: false,\n      project: buildProject({ relevance_score: 0, red_flags: ['Error parseando respuesta IA'], status: 'new' }),\n      proposal: null,\n      config: projectData.config,\n    }\n  }];\n}\n\nconst shouldApply = proposal.should_apply === true;\nconsole.log(`Proyecto: ${projectData.title} | Relevancia: ${proposal.relevance_score} | Aplica: ${shouldApply}`);\n\nreturn [{\n  json: {\n    should_apply: shouldApply,\n    project: buildProject({\n      relevance_score: proposal.relevance_score || 0,\n      red_flags: proposal.red_flags || [],\n      status: shouldApply ? 'proposal_generated' : 'skipped',\n    }),\n    proposal: shouldApply ? {\n      proposal_text: proposal.proposal_text || '',\n      questions_text: proposal.questions_text || '',\n      budget_suggested: proposal.budget_suggested || null,\n      delivery_days: proposal.delivery_days || null,\n      skills_recommended: proposal.skills_recommended || [],\n      portfolio_items: proposal.portfolio_items || [],\n      internal_notes: proposal.internal_notes || {},\n      proposal_variant: projectData.ab_variant || proposal.internal_notes?.ab_variant || 'A',\n      word_count: (proposal.proposal_text || '').split(/\\s+/).filter(w => w.length > 0).length,\n      tone: proposal.tone || 'direct',\n    } : null,\n    config: projectData.config,\n  }\n}];"
+        "jsCode": "// Parsear respuesta de la IA y estructurar datos\n// SIEMPRE devuelve datos para guardar en DB (evita reprocesar proyectos)\nconst aiResponse = $input.first().json;\nconst projectData = $('Obtener Detalles').item.json;\n\n// Helper para construir objeto proyecto\nfunction buildProject(overrides) {\n  return {\n    workana_url: projectData.url,\n    title: projectData.full_title || projectData.title,\n    description: (projectData.full_description || projectData.description || '').substring(0, 2000),\n    category: projectData.category || '',\n    budget_text: projectData.budget_detail || projectData.budget_text || '',\n    skills: projectData.skills_detail || projectData.skills || [],\n    client_name: projectData.client_name || '',\n    client_country: projectData.client_country || '',\n    client_rating: parseFloat(projectData.client_rating) || null,\n    client_verified: projectData.client_verified || false,\n    proposals_count: projectData.proposals_count || 0,\n    publication_date: projectData.publish_date || '',\n    pre_score: projectData.pre_score || 0,\n    budget_min: projectData.budget_min || null,\n    budget_max: projectData.budget_max || null,\n    budget_currency: projectData.budget_currency || 'EUR',\n    budget_type: projectData.budget_type || 'fixed',\n    proposals_count_parsed: parseInt(projectData.proposals_count) || null,\n    client_rating_parsed: parseFloat(projectData.client_rating) || null,\n    client_projects_posted: projectData.client_projects_posted || null,\n    client_hire_rate: projectData.client_hire_rate || null,\n    ...overrides,\n  };\n}\n\n// Si OpenAI devolvió error\nif (aiResponse.error) {\n  console.error('OpenAI ERROR:', JSON.stringify(aiResponse.error));\n  return [{\n    json: {\n      should_apply: false,\n      project: buildProject({\n        relevance_score: 0,\n        red_flags: ['Error en IA: ' + (aiResponse.error?.message || 'desconocido')],\n        status: 'new',\n      }),\n      proposal: null,\n      config: projectData.config,\n    }\n  }];\n}\n\nlet proposal;\ntry {\n  const content = aiResponse.choices?.[0]?.message?.content;\n  if (!content) {\n    console.error('NO CONTENT in AI response');\n    return [{\n      json: {\n        should_apply: false,\n        project: buildProject({ relevance_score: 0, red_flags: ['Sin respuesta de IA'], status: 'new' }),\n        proposal: null,\n        config: projectData.config,\n      }\n    }];\n  }\n  proposal = JSON.parse(content);\n} catch (e) {\n  console.error('JSON PARSE ERROR:', e.message);\n  return [{\n    json: {\n      should_apply: false,\n      project: buildProject({ relevance_score: 0, red_flags: ['Error parseando respuesta IA'], status: 'new' }),\n      proposal: null,\n      config: projectData.config,\n    }\n  }];\n}\n\nconst shouldApply = proposal.should_apply === true;\nconsole.log(`Proyecto: ${projectData.title} | Relevancia: ${proposal.relevance_score} | Aplica: ${shouldApply}`);\n\nreturn [{\n  json: {\n    should_apply: shouldApply,\n    project: buildProject({\n      relevance_score: proposal.relevance_score || 0,\n      red_flags: proposal.red_flags || [],\n      status: shouldApply ? 'proposal_generated' : 'skipped',\n    }),\n    proposal: shouldApply ? {\n      proposal_text: proposal.proposal_text || '',\n      questions_text: proposal.questions_text || '',\n      budget_suggested: proposal.budget_suggested || null,\n      delivery_days: proposal.delivery_days || null,\n      skills_recommended: proposal.skills_recommended || [],\n      portfolio_items: proposal.portfolio_items || [],\n      internal_notes: proposal.internal_notes || {},\n      proposal_variant: projectData.ab_variant || proposal.internal_notes?.ab_variant || 'A',\n      word_count: (proposal.proposal_text || '').split(/\\s+/).filter(w => w.length > 0).length,\n      tone: proposal.tone || 'direct',\n    } : null,\n    config: projectData.config,\n  }\n}];"
       },
       "id": "structure-data",
       "name": "Estructurar Datos",
@@ -695,7 +669,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2370,
+        2260,
         0
       ]
     }
@@ -757,17 +731,6 @@
       ]
     },
     "Obtener Detalles": {
-      "main": [
-        [
-          {
-            "node": "Combinar Datos",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Combinar Datos": {
       "main": [
         [
           {
