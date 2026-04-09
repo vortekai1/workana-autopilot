@@ -8,263 +8,375 @@ class ProposalSubmitter {
     const startTime = Date.now();
     const log = (msg) => console.log(`[Submitter] ${msg}`);
     const screenshots = {};
+    const MAX_SUBMIT_ATTEMPTS = 3;
 
     try {
       log(`=== INICIO SUBMIT ===`);
       log(`URL: ${projectUrl}`);
       log(`Budget: ${budget}, Debug: ${debug}`);
 
-      // 1. Navegar al proyecto
-      await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      await this.bm.randomDelay(2000, 3000);
-      await page.waitForFunction(
-        () => document.body.innerText.length > 500,
-        { timeout: 15000 }
-      ).catch(() => log('Timeout esperando render MFE'));
-      await this.bm.randomDelay(2000, 3000);
+      // =============================================
+      // BUCLE DE REINTENTOS — hasta MAX_SUBMIT_ATTEMPTS intentos completos
+      // Cada intento: navegar → rellenar → enviar → verificar
+      // Si el resultado es ambiguo, re-visita para confirmar antes de reintentar
+      // =============================================
 
-      // 1b. Cerrar banner de cookies si existe (bloquea clicks)
-      await this._dismissCookieConsent(page);
+      let lastResult = null;
 
-      const projectPageUrl = page.url();
-      log(`1. Página del proyecto cargada: ${projectPageUrl}`);
+      for (let attempt = 1; attempt <= MAX_SUBMIT_ATTEMPTS; attempt++) {
+        if (attempt > 1) {
+          log(`\n🔄 === REINTENTO ${attempt}/${MAX_SUBMIT_ATTEMPTS} ===`);
+          await this.bm.randomDelay(5000, 10000); // Delay entre reintentos
+        }
 
-      // 2. Buscar y clickar "Enviar una propuesta"
-      let applyClicked = await this._clickApplyButton(page);
-      if (!applyClicked) {
-        log('Botón no encontrado, reintentando en 5s...');
-        await this.bm.randomDelay(4000, 6000);
-        applyClicked = await this._clickApplyButton(page);
+        const attemptResult = await this._singleSubmitAttempt(
+          page, projectUrl, proposalText, budget, deliveryDays, debug, screenshots, log, attempt
+        );
+
+        if (attemptResult.success) {
+          attemptResult.elapsed_ms = Date.now() - startTime;
+          attemptResult.attempt = attempt;
+          if (debug) attemptResult.screenshots = screenshots;
+          log(`✅ Éxito en intento ${attempt}/${MAX_SUBMIT_ATTEMPTS} (${attemptResult.elapsed_ms}ms)`);
+          log(`=== FIN SUBMIT ===`);
+          return attemptResult;
+        }
+
+        lastResult = attemptResult;
+        log(`❌ Intento ${attempt}/${MAX_SUBMIT_ATTEMPTS} fallido: ${attemptResult.message}`);
+
+        // Si es un error terminal (no tiene sentido reintentar), salir
+        if (attemptResult._terminal) {
+          log('Error terminal — no se reintenta');
+          break;
+        }
+
+        // Antes de reintentar: verificar si realmente se envió (re-visitar proyecto)
+        if (attempt < MAX_SUBMIT_ATTEMPTS) {
+          log('Verificando si se envió antes de reintentar...');
+          const alreadySent = await this._verifyAlreadySent(page, projectUrl, log);
+          if (alreadySent) {
+            const result = {
+              success: true,
+              message: `Propuesta enviada (verificado en reintento ${attempt + 1})`,
+              attempt,
+              verified: true,
+              elapsed_ms: Date.now() - startTime,
+            };
+            if (debug) result.screenshots = screenshots;
+            log(`✅ Verificación confirmó envío — no es necesario reintentar`);
+            log(`=== FIN SUBMIT ===`);
+            return result;
+          }
+        }
       }
-      if (!applyClicked) {
-        if (debug) screenshots.noApplyButton = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-        return { success: false, message: 'No se encontró botón de propuesta', elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
-      }
-      log('2. Botón "Enviar propuesta" clickeado');
 
-      // 3. Esperar que el formulario cargue — puede aparecer "Área protegida"
+      // Todos los intentos fallaron
+      lastResult.elapsed_ms = Date.now() - startTime;
+      lastResult.attempts = MAX_SUBMIT_ATTEMPTS;
+      if (debug) lastResult.screenshots = screenshots;
+      log(`=== FIN SUBMIT — TODOS LOS INTENTOS FALLARON (${lastResult.elapsed_ms}ms) ===`);
+      return lastResult;
+
+    } catch (error) {
+      log(`ERROR FATAL: ${error.message}`);
+      return { success: false, message: `Error fatal: ${error.message}`, elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
+    } finally {
+      await page.close();
+    }
+  }
+
+  // =============================================
+  // INTENTO INDIVIDUAL DE SUBMIT (un ciclo completo: navegar → rellenar → enviar)
+  // =============================================
+
+  async _singleSubmitAttempt(page, projectUrl, proposalText, budget, deliveryDays, debug, screenshots, log, attempt) {
+
+    // 1. Navegar al proyecto
+    await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await this.bm.randomDelay(2000, 3000);
+    await page.waitForFunction(
+      () => document.body.innerText.length > 500,
+      { timeout: 15000 }
+    ).catch(() => log('Timeout esperando render MFE'));
+    await this.bm.randomDelay(2000, 3000);
+
+    // 1b. Cerrar banner de cookies si existe (bloquea clicks)
+    await this._dismissCookieConsent(page);
+
+    // 1c. Verificar si ya se envió la propuesta (puede haber funcionado en intento previo)
+    const alreadySentCheck = await page.evaluate(() => {
+      const bodyText = document.body?.innerText?.toLowerCase() || '';
+      return bodyText.includes('ya has enviado') || bodyText.includes('ya enviaste') || bodyText.includes('already sent');
+    });
+    if (alreadySentCheck) {
+      return { success: true, message: 'Propuesta ya enviada (detectado al cargar proyecto)', _terminal: false };
+    }
+
+    const projectPageUrl = page.url();
+    log(`1. Página del proyecto cargada: ${projectPageUrl}`);
+
+    // 2. Buscar y clickar "Enviar una propuesta"
+    let applyClicked = await this._clickApplyButton(page);
+    if (!applyClicked) {
+      log('Botón no encontrado, reintentando en 5s...');
+      await this.bm.randomDelay(4000, 6000);
+      applyClicked = await this._clickApplyButton(page);
+    }
+    if (!applyClicked) {
+      if (debug) screenshots[`noApplyButton_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      return { success: false, message: 'No se encontró botón de propuesta', _terminal: false };
+    }
+    log('2. Botón "Enviar propuesta" clickeado');
+
+    // 3. Esperar que el formulario cargue — puede aparecer "Área protegida"
+    await this.bm.randomDelay(3000, 5000);
+
+    // Verificar si Workana pide confirmar contraseña ("Área protegida")
+    const protectedHandled = await this._handleProtectedArea(page, log);
+    if (protectedHandled) {
+      log('3a. "Área protegida" detectada y resuelta, esperando formulario...');
       await this.bm.randomDelay(3000, 5000);
+    }
 
-      // Verificar si Workana pide confirmar contraseña ("Área protegida")
-      const protectedHandled = await this._handleProtectedArea(page, log);
-      if (protectedHandled) {
-        log('3a. "Área protegida" detectada y resuelta, esperando formulario...');
+    const formLoaded = await page.waitForFunction(
+      () => document.querySelectorAll('textarea').length > 0,
+      { timeout: 20000 }
+    ).catch(() => null);
+
+    if (!formLoaded) {
+      // Puede haber aparecido "Área protegida" después de la primera espera
+      const retryProtected = await this._handleProtectedArea(page, log);
+      if (retryProtected) {
+        log('3b. "Área protegida" detectada en retry, esperando formulario...');
         await this.bm.randomDelay(3000, 5000);
-      }
-
-      const formLoaded = await page.waitForFunction(
-        () => document.querySelectorAll('textarea').length > 0,
-        { timeout: 20000 }
-      ).catch(() => null);
-
-      if (!formLoaded) {
-        // Puede haber aparecido "Área protegida" después de la primera espera
-        const retryProtected = await this._handleProtectedArea(page, log);
-        if (retryProtected) {
-          log('3b. "Área protegida" detectada en retry, esperando formulario...');
-          await this.bm.randomDelay(3000, 5000);
-          await page.waitForFunction(
-            () => document.querySelectorAll('textarea').length > 0,
-            { timeout: 20000 }
-          ).catch(() => null);
-        }
-        // Verificar de nuevo si el formulario cargó
-        const hasTextarea = await page.evaluate(() => document.querySelectorAll('textarea').length > 0);
-        if (!hasTextarea) {
-          log('3. ERROR: Formulario no cargó');
-          if (debug) screenshots.noForm = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-          return { success: false, message: 'El formulario no cargó', elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
-        }
-      }
-
-      await this.bm.randomDelay(2000, 3000);
-      const formUrl = page.url();
-      log(`3. Formulario cargado. URL: ${formUrl}`);
-
-      // 4. Analizar el formulario
-      const formInfo = await this._analyzeForm(page);
-      log(`4. Análisis: ${JSON.stringify(formInfo)}`);
-      if (debug) screenshots.formLoaded = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-
-      // =============================================
-      // FLUJO DE RELLENADO (orden exacto Workana)
-      // =============================================
-
-      // 5. Rellenar texto de propuesta (textarea bid[content])
-      const textFilled = await this._fillProposalText(page, proposalText);
-      log(`5. Texto rellenado: ${textFilled}`);
-      if (!textFilled) {
-        return { success: false, message: 'No se encontró textarea', elapsed_ms: Date.now() - startTime, formInfo, screenshots: debug ? screenshots : undefined };
-      }
-      await this.bm.randomDelay(1000, 2000);
-
-      // 6. Rellenar presupuesto (Valor total o 40 si es por horas)
-      const budgetFilled = await this._fillBudget(page, budget);
-      log(`6. Presupuesto: ${budgetFilled}`);
-      await this.bm.randomDelay(800, 1500);
-
-      // Verificar que seguimos en el formulario
-      if (page.url() !== formUrl) {
-        log(`⚠️ URL cambió tras presupuesto: ${page.url()}`);
-        if (debug) screenshots.urlChanged = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-        return { success: false, message: `Navegación inesperada tras presupuesto: ${page.url()}`, elapsed_ms: Date.now() - startTime, formInfo, screenshots: debug ? screenshots : undefined };
-      }
-
-      // 7. Seleccionar habilidades visibles (hasta 5, sin abrir desplegable)
-      const skillsSelected = await this._selectSkills(page);
-      log(`7. Habilidades seleccionadas: ${skillsSelected}`);
-      await this.bm.randomDelay(800, 1500);
-
-      // Verificar que seguimos en el formulario
-      if (page.url() !== formUrl) {
-        log(`⚠️ URL cambió tras habilidades: ${page.url()}`);
-        return { success: false, message: `Navegación inesperada tras habilidades: ${page.url()}`, elapsed_ms: Date.now() - startTime, formInfo };
-      }
-
-      // 8. Seleccionar proyectos del portfolio (hasta 3, botón +)
-      const portfolioSelected = await this._selectPortfolioProjects(page);
-      log(`8. Proyectos portfolio seleccionados: ${portfolioSelected}`);
-      await this.bm.randomDelay(800, 1500);
-
-      // Verificar que seguimos en el formulario
-      if (page.url() !== formUrl) {
-        log(`⚠️ URL cambió tras portfolio: ${page.url()}`);
-        return { success: false, message: `Navegación inesperada tras portfolio: ${page.url()}`, elapsed_ms: Date.now() - startTime, formInfo };
-      }
-
-      // NO rellenamos delivery time (no obligatorio)
-
-      // 9. Rellenar task scopes (Workana exige alcance para cada tarea)
-      const tasksFilled = await this._fillTaskScopes(page);
-      log(`9. Task scopes rellenados: ${tasksFilled}`);
-      await this.bm.randomDelay(500, 1000);
-
-      // Verificar "Área protegida" antes de submit (puede aparecer durante interacción)
-      const preSubmitProtected = await this._handleProtectedArea(page, log);
-      if (preSubmitProtected) {
-        log('9a. "Área protegida" resuelta antes de submit, esperando formulario...');
-        await this.bm.randomDelay(3000, 5000);
-        // Esperar que el formulario vuelva a cargar
         await page.waitForFunction(
           () => document.querySelectorAll('textarea').length > 0,
           { timeout: 20000 }
         ).catch(() => null);
-        await this.bm.randomDelay(2000, 3000);
-
-        // RE-RELLENAR campos — el redirect de "Área protegida" puede vaciar el formulario
-        log('9a. Re-rellenando campos tras "Área protegida"...');
-        const reTextFilled = await this._fillProposalText(page, proposalText);
-        log(`9a. Re-texto: ${reTextFilled}`);
-        await this.bm.randomDelay(500, 1000);
-        const reBudgetFilled = await this._fillBudget(page, budget);
-        log(`9a. Re-presupuesto: ${reBudgetFilled}`);
-        await this.bm.randomDelay(500, 1000);
-        await this._selectSkills(page);
-        await this.bm.randomDelay(500, 1000);
-        await this._fillTaskScopes(page);
-        await this.bm.randomDelay(500, 1000);
       }
-
-      // 9b. Verificar que los campos se rellenaron correctamente en el estado del framework
-      const fieldValues = await this._verifyFormState(page);
-      log(`9b. Estado campos: ${JSON.stringify(fieldValues)}`);
-
-      // 9c. GATE: Abortar si los campos críticos están vacíos (el framework no los reconoció)
-      if (fieldValues.proposalLength === 0) {
-        log('❌ ABORT: Texto de propuesta vacío — execCommand no funcionó');
-        if (debug) screenshots.emptyFields = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-        return { success: false, message: 'ABORT: Texto de propuesta vacío en el DOM — el framework no reconoció el texto', fieldValues, formInfo, formUrl, elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
+      // Verificar de nuevo si el formulario cargó
+      const hasTextarea = await page.evaluate(() => document.querySelectorAll('textarea').length > 0);
+      if (!hasTextarea) {
+        log('3. ERROR: Formulario no cargó');
+        if (debug) screenshots[`noForm_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+        return { success: false, message: 'El formulario no cargó', _terminal: false };
       }
-      if (!fieldValues.budgetAmount || fieldValues.budgetAmount === 'NO ENCONTRADO' || fieldValues.budgetAmount === '') {
-        log('⚠️ Budget vacío — continuando igualmente (puede ser por horas)');
-      }
-      if (fieldValues.taskScopesTotal > 0 && fieldValues.taskScopesEmpty > 0) {
-        log(`⚠️ ${fieldValues.taskScopesEmpty}/${fieldValues.taskScopesTotal} task scopes vacíos`);
-      }
+    }
 
-      // Delay extra para que el framework MFE procese todos los eventos
+    await this.bm.randomDelay(2000, 3000);
+    const formUrl = page.url();
+    log(`3. Formulario cargado. URL: ${formUrl}`);
+
+    // 4. Analizar el formulario
+    const formInfo = await this._analyzeForm(page);
+    log(`4. Análisis: ${JSON.stringify(formInfo)}`);
+    if (debug && attempt === 1) screenshots.formLoaded = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+
+    // =============================================
+    // FLUJO DE RELLENADO (orden exacto Workana)
+    // =============================================
+
+    // 5. Rellenar texto de propuesta (textarea bid[content])
+    const textFilled = await this._fillProposalText(page, proposalText);
+    log(`5. Texto rellenado: ${textFilled}`);
+    if (!textFilled) {
+      return { success: false, message: 'No se encontró textarea', formInfo, formUrl, _terminal: false };
+    }
+    await this.bm.randomDelay(1000, 2000);
+
+    // 6. Rellenar presupuesto (Valor total o 40 si es por horas)
+    const budgetFilled = await this._fillBudget(page, budget);
+    log(`6. Presupuesto: ${budgetFilled}`);
+    await this.bm.randomDelay(800, 1500);
+
+    // Verificar que seguimos en el formulario
+    if (page.url() !== formUrl) {
+      log(`⚠️ URL cambió tras presupuesto: ${page.url()}`);
+      if (debug) screenshots[`urlChanged_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      return { success: false, message: `Navegación inesperada tras presupuesto: ${page.url()}`, formInfo, _terminal: false };
+    }
+
+    // 7. Seleccionar habilidades visibles (hasta 5, sin abrir desplegable)
+    const skillsSelected = await this._selectSkills(page);
+    log(`7. Habilidades seleccionadas: ${skillsSelected}`);
+    await this.bm.randomDelay(800, 1500);
+
+    // Verificar que seguimos en el formulario
+    if (page.url() !== formUrl) {
+      log(`⚠️ URL cambió tras habilidades: ${page.url()}`);
+      return { success: false, message: `Navegación inesperada tras habilidades: ${page.url()}`, formInfo, _terminal: false };
+    }
+
+    // 8. Seleccionar proyectos del portfolio (hasta 3, botón +)
+    const portfolioSelected = await this._selectPortfolioProjects(page);
+    log(`8. Proyectos portfolio seleccionados: ${portfolioSelected}`);
+    await this.bm.randomDelay(800, 1500);
+
+    // Verificar que seguimos en el formulario
+    if (page.url() !== formUrl) {
+      log(`⚠️ URL cambió tras portfolio: ${page.url()}`);
+      return { success: false, message: `Navegación inesperada tras portfolio: ${page.url()}`, formInfo, _terminal: false };
+    }
+
+    // NO rellenamos delivery time (no obligatorio)
+
+    // 9. Rellenar task scopes (Workana exige alcance para cada tarea)
+    const tasksFilled = await this._fillTaskScopes(page);
+    log(`9. Task scopes rellenados: ${tasksFilled}`);
+    await this.bm.randomDelay(500, 1000);
+
+    // Verificar "Área protegida" antes de submit (puede aparecer durante interacción)
+    const preSubmitProtected = await this._handleProtectedArea(page, log);
+    if (preSubmitProtected) {
+      log('9a. "Área protegida" resuelta antes de submit, esperando formulario...');
+      await this.bm.randomDelay(3000, 5000);
+      // Esperar que el formulario vuelva a cargar
+      await page.waitForFunction(
+        () => document.querySelectorAll('textarea').length > 0,
+        { timeout: 20000 }
+      ).catch(() => null);
       await this.bm.randomDelay(2000, 3000);
 
-      if (debug) screenshots.beforeSubmit = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
+      // RE-RELLENAR campos — el redirect de "Área protegida" puede vaciar el formulario
+      log('9a. Re-rellenando campos tras "Área protegida"...');
+      const reTextFilled = await this._fillProposalText(page, proposalText);
+      log(`9a. Re-texto: ${reTextFilled}`);
+      await this.bm.randomDelay(500, 1000);
+      const reBudgetFilled = await this._fillBudget(page, budget);
+      log(`9a. Re-presupuesto: ${reBudgetFilled}`);
+      await this.bm.randomDelay(500, 1000);
+      await this._selectSkills(page);
+      await this.bm.randomDelay(500, 1000);
+      await this._fillTaskScopes(page);
+      await this.bm.randomDelay(500, 1000);
+    }
 
-      // 10. Click en "Enviar propuesta/presupuesto"
-      const submitClicked = await this._clickSubmitButton(page);
-      log(`10. Submit clickeado: ${submitClicked}`);
+    // 9b. Verificar que los campos se rellenaron correctamente en el estado del framework
+    const fieldValues = await this._verifyFormState(page);
+    log(`9b. Estado campos: ${JSON.stringify(fieldValues)}`);
 
-      if (!submitClicked) {
-        if (debug) screenshots.noSubmitBtn = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-        return { success: false, message: 'No se encontró botón submit', elapsed_ms: Date.now() - startTime, formInfo, screenshots: debug ? screenshots : undefined };
-      }
+    // 9c. GATE: Abortar si los campos críticos están vacíos (el framework no los reconoció)
+    if (fieldValues.proposalLength === 0) {
+      log('❌ ABORT: Texto de propuesta vacío — execCommand no funcionó');
+      if (debug) screenshots[`emptyFields_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      return { success: false, message: 'ABORT: Texto de propuesta vacío en el DOM — el framework no reconoció el texto', fieldValues, formInfo, formUrl, _terminal: false };
+    }
+    if (!fieldValues.budgetAmount || fieldValues.budgetAmount === 'NO ENCONTRADO' || fieldValues.budgetAmount === '') {
+      log('⚠️ Budget vacío — continuando igualmente (puede ser por horas)');
+    }
+    if (fieldValues.taskScopesTotal > 0 && fieldValues.taskScopesEmpty > 0) {
+      log(`⚠️ ${fieldValues.taskScopesEmpty}/${fieldValues.taskScopesTotal} task scopes vacíos`);
+    }
 
-      // 11. Esperar resultado — navegación O cambio en la página
-      log('11. Esperando resultado (navegación o cambio en página)...');
-      await Promise.race([
-        page.waitForNavigation({ timeout: 10000 }).catch(() => null),
-        page.waitForFunction(
-          () => {
-            const text = document.body.innerText.toLowerCase();
-            return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
-              text.includes('felicitaciones') || text.includes('proposal sent') ||
-              text.includes('especifique un alcance') || text.includes('campo obligatorio');
-          },
-          { timeout: 10000 }
-        ).catch(() => null),
-      ]);
-      await this.bm.randomDelay(1500, 2500);
+    // Delay extra para que el framework MFE procese todos los eventos
+    await this.bm.randomDelay(2000, 3000);
 
-      // 11b. Si la URL no cambió, intentar form.requestSubmit() como ÚNICO fallback
-      // NUNCA usar form.submit() — bypasea validación y causa falsos positivos
-      if (page.url() === formUrl) {
-        log('11b. URL no cambió tras click — intentando form.requestSubmit()...');
-        const requestSubmitResult = await page.evaluate(() => {
-          const form = document.querySelector('form');
-          if (form && typeof form.requestSubmit === 'function') {
-            try { form.requestSubmit(); return 'requestSubmit OK'; } catch (e) { return `requestSubmit error: ${e.message}`; }
-          }
-          // NO usar form.submit() — bypasea validación del cliente
-          return form ? 'requestSubmit not available' : 'no form found';
-        });
-        log(`11b. Resultado fallback: ${requestSubmitResult}`);
+    if (debug) screenshots[`beforeSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
-        if (requestSubmitResult === 'requestSubmit OK') {
-          // Esperar de nuevo navegación/cambio
-          await Promise.race([
-            page.waitForNavigation({ timeout: 10000 }).catch(() => null),
-            page.waitForFunction(
-              () => {
-                const text = document.body.innerText.toLowerCase();
-                return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
-                  text.includes('especifique un alcance') || text.includes('campo obligatorio');
-              },
-              { timeout: 10000 }
-            ).catch(() => null),
-          ]);
-          await this.bm.randomDelay(2000, 3000);
+    // 10. Click en "Enviar propuesta/presupuesto"
+    const submitClicked = await this._clickSubmitButton(page);
+    log(`10. Submit clickeado: ${submitClicked}`);
+
+    if (!submitClicked) {
+      if (debug) screenshots[`noSubmitBtn_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      return { success: false, message: 'No se encontró botón submit', formInfo, _terminal: false };
+    }
+
+    // 11. Esperar resultado — navegación O cambio en la página
+    log('11. Esperando resultado (navegación o cambio en página)...');
+    await Promise.race([
+      page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+      page.waitForFunction(
+        () => {
+          const text = document.body.innerText.toLowerCase();
+          return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
+            text.includes('felicitaciones') || text.includes('proposal sent') ||
+            text.includes('especifique un alcance') || text.includes('campo obligatorio');
+        },
+        { timeout: 15000 }
+      ).catch(() => null),
+    ]);
+    await this.bm.randomDelay(2000, 3000);
+
+    // 11b. Si la URL no cambió, intentar form.requestSubmit() como ÚNICO fallback
+    // NUNCA usar form.submit() — bypasea validación y causa falsos positivos
+    if (page.url() === formUrl) {
+      log('11b. URL no cambió tras click — intentando form.requestSubmit()...');
+      const requestSubmitResult = await page.evaluate(() => {
+        const form = document.querySelector('form');
+        if (form && typeof form.requestSubmit === 'function') {
+          try { form.requestSubmit(); return 'requestSubmit OK'; } catch (e) { return `requestSubmit error: ${e.message}`; }
         }
+        // NO usar form.submit() — bypasea validación del cliente
+        return form ? 'requestSubmit not available' : 'no form found';
+      });
+      log(`11b. Resultado fallback: ${requestSubmitResult}`);
+
+      if (requestSubmitResult === 'requestSubmit OK') {
+        // Esperar de nuevo navegación/cambio
+        await Promise.race([
+          page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+          page.waitForFunction(
+            () => {
+              const text = document.body.innerText.toLowerCase();
+              return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
+                text.includes('especifique un alcance') || text.includes('campo obligatorio');
+            },
+            { timeout: 15000 }
+          ).catch(() => null),
+        ]);
+        await this.bm.randomDelay(2000, 3000);
       }
+    }
 
-      const finalUrl = page.url();
-      log(`11. URL final: ${finalUrl}`);
+    const finalUrl = page.url();
+    log(`11. URL final: ${finalUrl}`);
 
-      if (debug) screenshots.afterSubmit = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+    if (debug) screenshots[`afterSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
 
-      // 12. Verificar resultado
-      const result = await this._checkSubmissionResult(page, formUrl);
-      result.elapsed_ms = Date.now() - startTime;
-      result.formInfo = formInfo;
-      result.fieldValues = fieldValues;
-      result.formUrl = formUrl;
-      result.finalUrl = finalUrl;
-      if (debug) result.screenshots = screenshots;
+    // 12. Verificar resultado
+    const result = await this._checkSubmissionResult(page, formUrl, projectUrl);
+    result.formInfo = formInfo;
+    result.fieldValues = fieldValues;
+    result.formUrl = formUrl;
+    result.finalUrl = finalUrl;
+    result.attempt = attempt;
 
-      log(`12. Resultado: ${result.success ? '✅' : '❌'} ${result.message}`);
-      log(`=== FIN SUBMIT (${result.elapsed_ms}ms) ===`);
-      return result;
-    } catch (error) {
-      log(`ERROR: ${error.message}`);
-      return { success: false, message: `Error: ${error.message}`, elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
-    } finally {
-      await page.close();
+    return result;
+  }
+
+  // =============================================
+  // VERIFICAR SI LA PROPUESTA YA FUE ENVIADA (re-visitar proyecto)
+  // =============================================
+
+  async _verifyAlreadySent(page, projectUrl, log) {
+    try {
+      await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+      await this.bm.randomDelay(2000, 3000);
+      await page.waitForFunction(
+        () => document.body.innerText.length > 500,
+        { timeout: 10000 }
+      ).catch(() => {});
+
+      const sent = await page.evaluate(() => {
+        const bodyText = document.body?.innerText?.toLowerCase() || '';
+        return bodyText.includes('ya has enviado') ||
+          bodyText.includes('ya enviaste') ||
+          bodyText.includes('already sent') ||
+          bodyText.includes('propuesta enviada') ||
+          bodyText.includes('tu propuesta');
+      });
+
+      if (sent) {
+        log('✅ Re-visita al proyecto confirmó que la propuesta fue enviada');
+      } else {
+        log('Re-visita: no hay confirmación de envío — se reintentará');
+      }
+      return sent;
+    } catch (e) {
+      log(`Error verificando envío: ${e.message}`);
+      return false;
     }
   }
 
@@ -705,7 +817,7 @@ class ProposalSubmitter {
   // VERIFICAR RESULTADO DEL ENVÍO
   // =============================================
 
-  async _checkSubmissionResult(page, formUrl) {
+  async _checkSubmissionResult(page, formUrl, projectUrl) {
     const currentUrl = page.url();
 
     const pageState = await page.evaluate(() => {
@@ -741,6 +853,7 @@ class ProposalSubmitter {
 
     // =============================================
     // DETECCIÓN ULTRA-CONSERVADORA — SOLO 3 VÍAS DE ÉXITO
+    // + 1 VÍA DE VERIFICACIÓN (re-visita al proyecto)
     // Prefiere falso negativo (dice que falló cuando sí se envió)
     // a falso positivo (dice que se envió cuando NO se envió)
     // =============================================
@@ -758,6 +871,45 @@ class ProposalSubmitter {
     // ÉXITO 3: URL redirigió a /inbox/ (comportamiento real de Workana tras enviar)
     if (currentUrl.includes('/inbox/')) {
       return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
+    }
+
+    // =============================================
+    // CASO AMBIGUO: URL cambió, formulario no visible, sin errores
+    // → Verificar volviendo al proyecto para buscar "ya has enviado"
+    // =============================================
+
+    const isAmbiguous = currentUrl !== formUrl &&
+      !pageState.hasValidationError &&
+      !pageState.hasVisibleTextarea &&
+      !pageState.hasSubmitBtn;
+
+    if (isAmbiguous && projectUrl) {
+      console.log('[Submitter] Resultado ambiguo — verificando en página del proyecto...');
+      try {
+        await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+        await this.bm.randomDelay(2000, 3000);
+        await page.waitForFunction(
+          () => document.body.innerText.length > 500,
+          { timeout: 10000 }
+        ).catch(() => {});
+
+        const verified = await page.evaluate(() => {
+          const bodyText = document.body?.innerText?.toLowerCase() || '';
+          return bodyText.includes('ya has enviado') ||
+            bodyText.includes('ya enviaste') ||
+            bodyText.includes('already sent') ||
+            bodyText.includes('propuesta enviada') ||
+            bodyText.includes('tu propuesta');
+        });
+
+        if (verified) {
+          console.log('[Submitter] ✅ Verificación post-submit confirmó envío');
+          return { success: true, message: 'Propuesta enviada (verificado re-visitando proyecto)', url: currentUrl, pageState, verified: true };
+        }
+        console.log('[Submitter] Re-visita no confirmó envío');
+      } catch (e) {
+        console.log(`[Submitter] Error en verificación post-submit: ${e.message}`);
+      }
     }
 
     // =============================================
@@ -780,7 +932,7 @@ class ProposalSubmitter {
     } else if (currentUrl === formUrl) {
       failMessage = 'URL no cambió y formulario no visible — estado desconocido';
     } else {
-      failMessage = `URL cambió a ${currentUrl} pero SIN confirmación explícita de éxito`;
+      failMessage = `URL cambió a ${currentUrl} pero SIN confirmación explícita de éxito (verificación también negativa)`;
     }
 
     return { success: false, message: failMessage, url: currentUrl, pageState, bodySnippet };
