@@ -139,12 +139,9 @@ class ProposalSubmitter {
     await this._dismissCookieConsent(page);
 
     // 1c. Verificar si ya se envió la propuesta (puede haber funcionado en intento previo)
-    const alreadySentCheck = await page.evaluate(() => {
-      const bodyText = document.body?.innerText?.toLowerCase() || '';
-      return bodyText.includes('ya has enviado') || bodyText.includes('ya enviaste') || bodyText.includes('already sent');
-    });
-    if (alreadySentCheck) {
-      return { success: true, message: 'Propuesta ya enviada (detectado al cargar proyecto)', _terminal: false };
+    const alreadyApplied = await this._checkIfAlreadyApplied(page);
+    if (alreadyApplied.sent) {
+      return { success: true, message: `Propuesta ya enviada (${alreadyApplied.reason})`, _terminal: false };
     }
 
     const projectPageUrl = page.url();
@@ -386,32 +383,79 @@ class ProposalSubmitter {
 
   async _verifyAlreadySent(page, projectUrl, log) {
     try {
-      await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-      await this.bm.randomDelay(2000, 3000);
+      await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      await this.bm.randomDelay(3000, 5000);
       await page.waitForFunction(
         () => document.body.innerText.length > 500,
-        { timeout: 10000 }
+        { timeout: 15000 }
       ).catch(() => {});
+      // Espera extra para MFE — el botón "Enviar propuesta" puede tardar en renderizar
+      await this.bm.randomDelay(2000, 4000);
 
-      const sent = await page.evaluate(() => {
-        const bodyText = document.body?.innerText?.toLowerCase() || '';
-        return bodyText.includes('ya has enviado') ||
-          bodyText.includes('ya enviaste') ||
-          bodyText.includes('already sent') ||
-          bodyText.includes('propuesta enviada') ||
-          bodyText.includes('tu propuesta ha sido');
-      });
+      const result = await this._checkIfAlreadyApplied(page);
 
-      if (sent) {
-        log('✅ Re-visita al proyecto confirmó que la propuesta fue enviada');
+      if (result.sent) {
+        log(`✅ Re-visita confirmó envío: ${result.reason}`);
       } else {
-        log('Re-visita: no hay confirmación de envío — se reintentará');
+        log(`Re-visita: no hay confirmación (${result.reason}) — se reintentará`);
       }
-      return sent;
+      return result.sent;
     } catch (e) {
       log(`Error verificando envío: ${e.message}`);
       return false;
     }
+  }
+
+  // =============================================
+  // VERIFICACIÓN ROBUSTA: ¿ya apliqué a este proyecto?
+  // Combina texto + ausencia del botón "Enviar propuesta"
+  // =============================================
+
+  async _checkIfAlreadyApplied(page) {
+    return page.evaluate(() => {
+      const bodyText = document.body?.innerText?.toLowerCase() || '';
+
+      // 1. Texto explícito de que ya se envió
+      const sentTexts = [
+        'ya has enviado', 'ya enviaste', 'already sent',
+        'propuesta enviada', 'tu propuesta ha sido',
+        'ya aplicaste', 'ya has aplicado', 'already applied',
+      ];
+      const textMatch = sentTexts.find(t => bodyText.includes(t));
+      if (textMatch) {
+        return { sent: true, reason: `texto "${textMatch}" encontrado` };
+      }
+
+      // 2. Ausencia del botón "Enviar una propuesta" — si NO está, ya aplicamos
+      //    Este botón SOLO aparece cuando NO has enviado propuesta
+      const applyTexts = [
+        'enviar una propuesta', 'enviar propuesta', 'send a proposal',
+        'send proposal', 'aplicar a este proyecto', 'apply to this project',
+      ];
+      const allClickable = [...document.querySelectorAll('a, button, [role="button"]')];
+      const applyButton = allClickable.find(el => {
+        if (el.offsetHeight === 0) return false;
+        const text = (el.textContent || '').trim().toLowerCase();
+        return applyTexts.some(t => text.includes(t));
+      });
+
+      if (!applyButton) {
+        // El botón no existe — verificar que la página SÍ cargó correctamente
+        // (no queremos falso positivo si la página no cargó)
+        const isProjectPage = bodyText.length > 1000 &&
+          (bodyText.includes('propuesta') || bodyText.includes('proyecto') ||
+           bodyText.includes('proposal') || bodyText.includes('project') ||
+           bodyText.includes('habilidades') || bodyText.includes('skills'));
+
+        if (isProjectPage) {
+          return { sent: true, reason: 'botón "Enviar propuesta" ausente en página cargada' };
+        }
+        return { sent: false, reason: 'página no parece proyecto válido (sin botón)' };
+      }
+
+      // 3. Botón presente → no se ha enviado
+      return { sent: false, reason: 'botón "Enviar propuesta" todavía visible' };
+    });
   }
 
   // =============================================
@@ -920,27 +964,22 @@ class ProposalSubmitter {
     if (isAmbiguous && projectUrl) {
       console.log('[Submitter] Resultado ambiguo — verificando en página del proyecto...');
       try {
-        await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-        await this.bm.randomDelay(2000, 3000);
+        await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await this.bm.randomDelay(3000, 5000);
         await page.waitForFunction(
           () => document.body.innerText.length > 500,
-          { timeout: 10000 }
+          { timeout: 15000 }
         ).catch(() => {});
+        // Espera extra para MFE — el botón puede tardar en renderizar
+        await this.bm.randomDelay(2000, 4000);
 
-        const verified = await page.evaluate(() => {
-          const bodyText = document.body?.innerText?.toLowerCase() || '';
-          return bodyText.includes('ya has enviado') ||
-            bodyText.includes('ya enviaste') ||
-            bodyText.includes('already sent') ||
-            bodyText.includes('propuesta enviada') ||
-            bodyText.includes('tu propuesta ha sido');
-        });
+        const checkResult = await this._checkIfAlreadyApplied(page);
 
-        if (verified) {
-          console.log('[Submitter] ✅ Verificación post-submit confirmó envío');
-          return { success: true, message: 'Propuesta enviada (verificado re-visitando proyecto)', url: currentUrl, pageState, verified: true };
+        if (checkResult.sent) {
+          console.log(`[Submitter] ✅ Verificación post-submit confirmó envío: ${checkResult.reason}`);
+          return { success: true, message: `Propuesta enviada (${checkResult.reason})`, url: currentUrl, pageState, verified: true };
         }
-        console.log('[Submitter] Re-visita no confirmó envío');
+        console.log(`[Submitter] Re-visita no confirmó envío: ${checkResult.reason}`);
       } catch (e) {
         console.log(`[Submitter] Error en verificación post-submit: ${e.message}`);
       }
