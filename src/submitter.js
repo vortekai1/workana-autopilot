@@ -156,7 +156,9 @@ class ProposalSubmitter {
     }
     if (!applyClicked) {
       if (debug) screenshots[`noApplyButton_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-      return { success: false, message: 'No se encontró botón de propuesta', _terminal: false };
+      // Si el botón no aparece tras 2 intentos, el proyecto probablemente no acepta propuestas
+      // (ej: "Evaluando propuestas", cerrado, >50 propuestas). Marcar como terminal.
+      return { success: false, message: 'No se encontró botón de propuesta — proyecto posiblemente cerrado', _terminal: true };
     }
     log('2. Botón "Enviar propuesta" clickeado');
 
@@ -426,8 +428,7 @@ class ProposalSubmitter {
         return { sent: true, reason: `texto "${textMatch}" encontrado` };
       }
 
-      // 2. Ausencia del botón "Enviar una propuesta" — si NO está, ya aplicamos
-      //    Este botón SOLO aparece cuando NO has enviado propuesta
+      // 2. Comprobar si el botón "Enviar propuesta" está presente
       const applyTexts = [
         'enviar una propuesta', 'enviar propuesta', 'send a proposal',
         'send proposal', 'aplicar a este proyecto', 'apply to this project',
@@ -439,22 +440,18 @@ class ProposalSubmitter {
         return applyTexts.some(t => text.includes(t));
       });
 
-      if (!applyButton) {
-        // El botón no existe — verificar que la página SÍ cargó correctamente
-        // (no queremos falso positivo si la página no cargó)
-        const isProjectPage = bodyText.length > 1000 &&
-          (bodyText.includes('propuesta') || bodyText.includes('proyecto') ||
-           bodyText.includes('proposal') || bodyText.includes('project') ||
-           bodyText.includes('habilidades') || bodyText.includes('skills'));
-
-        if (isProjectPage) {
-          return { sent: true, reason: 'botón "Enviar propuesta" ausente en página cargada' };
-        }
-        return { sent: false, reason: 'página no parece proyecto válido (sin botón)' };
+      if (applyButton) {
+        // Botón presente → definitivamente no se ha enviado
+        return { sent: false, reason: 'botón "Enviar propuesta" todavía visible' };
       }
 
-      // 3. Botón presente → no se ha enviado
-      return { sent: false, reason: 'botón "Enviar propuesta" todavía visible' };
+      // 3. Botón AUSENTE + sin texto confirmatorio → NO es prueba de envío
+      //    El botón puede faltar porque:
+      //    - El proyecto cerró admisión ("Evaluando propuestas")
+      //    - El MFE no renderizó la sección
+      //    - Workana bloqueó temporalmente
+      //    NUNCA asumir envío sin confirmación explícita de texto
+      return { sent: false, reason: 'botón ausente pero sin texto de confirmación — no se considera enviado' };
     });
   }
 
