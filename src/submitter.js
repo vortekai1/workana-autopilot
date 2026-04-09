@@ -156,6 +156,22 @@ class ProposalSubmitter {
       const fieldValues = await this._verifyFormState(page);
       log(`9b. Estado campos: ${JSON.stringify(fieldValues)}`);
 
+      // 9c. GATE: Abortar si los campos críticos están vacíos (el framework no los reconoció)
+      if (fieldValues.proposalLength === 0) {
+        log('❌ ABORT: Texto de propuesta vacío — execCommand no funcionó');
+        if (debug) screenshots.emptyFields = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+        return { success: false, message: 'ABORT: Texto de propuesta vacío en el DOM — el framework no reconoció el texto', fieldValues, formInfo, formUrl, elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
+      }
+      if (!fieldValues.budgetAmount || fieldValues.budgetAmount === 'NO ENCONTRADO' || fieldValues.budgetAmount === '') {
+        log('⚠️ Budget vacío — continuando igualmente (puede ser por horas)');
+      }
+      if (fieldValues.taskScopesTotal > 0 && fieldValues.taskScopesEmpty > 0) {
+        log(`⚠️ ${fieldValues.taskScopesEmpty}/${fieldValues.taskScopesTotal} task scopes vacíos`);
+      }
+
+      // Delay extra para que el framework MFE procese todos los eventos
+      await this.bm.randomDelay(2000, 3000);
+
       if (debug) screenshots.beforeSubmit = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
       // 10. Click en "Enviar propuesta/presupuesto"
@@ -386,6 +402,7 @@ class ProposalSubmitter {
       const name = await page.evaluate(el => el.name || el.id || 'unknown', textarea);
       console.log(`[Submitter] Usando textarea: ${name}`);
 
+      // Click + limpiar contenido existente
       await textarea.click();
       await this.bm.randomDelay(200, 400);
       await page.keyboard.down('Control');
@@ -394,21 +411,30 @@ class ProposalSubmitter {
       await page.keyboard.press('Backspace');
       await this.bm.randomDelay(200, 400);
 
-      // Escribir primeros 30 chars "humanamente", resto inyectado
+      // Escribir primeros 30 chars "humanamente" (anti-detección)
       const humanPart = text.substring(0, 30);
       const restPart = text.substring(30);
       for (const char of humanPart) {
         await page.keyboard.type(char, { delay: 20 + Math.random() * 40 });
       }
-      // Inyectar el texto completo usando native setter (compatible con React/Vue/Angular MFE)
-      // el.value = ... directo NO actualiza el estado del framework → submit falla silenciosamente
-      await textarea.evaluate((el, fullText) => {
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        nativeSetter.call(el, fullText);
-        el.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // Insertar el resto con execCommand('insertText')
+      // Esto pasa por el pipeline del navegador igual que teclear —
+      // TODOS los frameworks MFE (React/Vue/Angular) lo reconocen.
+      // A diferencia del native setter, que puede fallar silenciosamente.
+      await textarea.evaluate((el, rest) => {
+        el.focus();
+        document.execCommand('insertText', false, rest);
+      }, restPart);
+
+      await this.bm.randomDelay(300, 600);
+
+      // Dispatch blur para finalizar la edición en el framework
+      await textarea.evaluate(el => {
         el.dispatchEvent(new Event('change', { bubbles: true }));
         el.dispatchEvent(new Event('blur', { bubbles: true }));
-      }, text);
+      });
+
       return true;
     }
     return false;
@@ -545,18 +571,22 @@ class ProposalSubmitter {
         }), input);
         if (!info.visible) continue;
         console.log(`[Submitter] Budget input: ${sel} (name=${info.name}, current=${info.currentValue})`);
+        // Triple-click para seleccionar todo + borrar
         await input.click({ clickCount: 3 });
         await this.bm.randomDelay(200, 400);
-        // Escribir con Puppeteer type (simula teclas reales)
-        await input.type(String(amount), { delay: 40 + Math.random() * 40 });
-        // TAMBIÉN usar native setter para que el framework MFE detecte el cambio
+        await page.keyboard.press('Backspace');
+        await this.bm.randomDelay(100, 200);
+        // Insertar con execCommand (universalmente reconocido por frameworks MFE)
         await input.evaluate((el, val) => {
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          nativeSetter.call(el, String(val));
-          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.focus();
+          document.execCommand('insertText', false, String(val));
+        }, amount);
+        await this.bm.randomDelay(200, 400);
+        // Dispatch blur para finalizar la edición
+        await input.evaluate(el => {
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('blur', { bubbles: true }));
-        }, amount);
+        });
         return `${amount} (${isHourly ? 'hourly' : 'fixed'})`;
       }
     }
@@ -607,14 +637,8 @@ class ProposalSubmitter {
         if (btn && btn.offsetHeight === 0) btn = null;
       }
 
-      // 4. Cualquier elemento con "enviar" visible (último recurso)
-      if (!btn) {
-        btn = allClickable.find(el => {
-          const tc = (el.textContent || '').trim().toLowerCase();
-          const val = (el.value || '').trim().toLowerCase();
-          return el.offsetHeight > 0 && (tc.includes('enviar') || val.includes('enviar'));
-        });
-      }
+      // NO usar catch-all "enviar" — puede clickar enlaces/botones incorrectos
+      // (ej: "Enviar mensaje", breadcrumbs, etc.) causando navegación inesperada
 
       if (btn) {
         // Marcar para click nativo de Puppeteer
@@ -660,20 +684,7 @@ class ProposalSubmitter {
     const pageState = await page.evaluate(() => {
       const bodyText = document.body?.innerText?.toLowerCase() || '';
 
-      // Formulario todavía presente
-      const textareas = document.querySelectorAll('textarea');
-      const hasVisibleTextarea = [...textareas].some(t => t.offsetHeight > 20);
-
-      // Buscar input[type=submit] o botón enviar todavía visible
-      const submitInput = document.querySelector('input[type="submit"]');
-      const hasSubmitInput = submitInput && submitInput.offsetHeight > 0;
-      const hasSubmitBtn = hasSubmitInput ||
-        [...document.querySelectorAll('button')].some(b =>
-          b.offsetHeight > 0 &&
-          ((b.textContent || '').trim().toLowerCase().includes('enviar'))
-        );
-
-      // Confirmación de éxito
+      // Confirmación EXPLÍCITA de éxito — textos que SOLO aparecen tras enviar
       const successIndicators = [
         'propuesta enviada', 'proposal sent', 'tu propuesta ha sido',
         'felicitaciones', 'propuesta fue enviada', 'congratulations',
@@ -681,7 +692,7 @@ class ProposalSubmitter {
       ];
       const hasSuccess = successIndicators.some(t => bodyText.includes(t));
 
-      // Ya enviada
+      // Ya enviada anteriormente
       const alreadySent = bodyText.includes('ya has enviado') ||
         bodyText.includes('ya enviaste') || bodyText.includes('already sent');
 
@@ -690,71 +701,62 @@ class ProposalSubmitter {
         bodyText.includes('required field') || bodyText.includes('por favor complet') ||
         bodyText.includes('especifique un alcance') || bodyText.includes('alcance válido');
 
-      return {
-        hasVisibleTextarea,
-        hasSubmitBtn,
-        hasSuccess,
-        alreadySent,
-        hasValidationError,
-        bodyLength: bodyText.length,
-      };
+      // Formulario todavía presente
+      const hasVisibleTextarea = [...document.querySelectorAll('textarea')].some(t => t.offsetHeight > 20);
+      const submitInput = document.querySelector('input[type="submit"]');
+      const hasSubmitBtn = submitInput && submitInput.offsetHeight > 0;
+
+      return { hasSuccess, alreadySent, hasValidationError, hasVisibleTextarea, hasSubmitBtn, bodyLength: bodyText.length };
     });
 
     console.log(`[Submitter] Check: formUrl=${formUrl}, currentUrl=${currentUrl}`);
     console.log(`[Submitter] State: ${JSON.stringify(pageState)}`);
 
-    // REGLA 1: Texto de éxito claro → success
+    // =============================================
+    // DETECCIÓN ULTRA-CONSERVADORA — SOLO 3 VÍAS DE ÉXITO
+    // Prefiere falso negativo (dice que falló cuando sí se envió)
+    // a falso positivo (dice que se envió cuando NO se envió)
+    // =============================================
+
+    // ÉXITO 1: Texto explícito de confirmación en la página
     if (pageState.hasSuccess) {
-      return { success: true, message: 'Propuesta enviada (confirmación en página)', url: currentUrl };
+      return { success: true, message: 'Propuesta enviada (confirmación en página)', url: currentUrl, pageState };
     }
 
-    // REGLA 2: Ya enviada antes → success
+    // ÉXITO 2: Ya enviada anteriormente
     if (pageState.alreadySent) {
-      return { success: true, message: 'Propuesta ya enviada anteriormente', url: currentUrl };
+      return { success: true, message: 'Propuesta ya enviada anteriormente', url: currentUrl, pageState };
     }
 
-    // REGLA 3: Error de validación → failure
-    if (pageState.hasValidationError) {
-      return { success: false, message: 'Validación del formulario falló', url: currentUrl, pageState };
-    }
-
-    // REGLA 3b: Formulario sigue visible con botón submit → failure
-    if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn) {
-      return { success: false, message: 'El formulario sigue visible — la propuesta NO se envió', url: currentUrl, pageState };
-    }
-
-    // REGLA 4: URL cambió a inbox/conversación → éxito (Workana redirige tras enviar)
+    // ÉXITO 3: URL redirigió a /inbox/ (comportamiento real de Workana tras enviar)
     if (currentUrl.includes('/inbox/')) {
       return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
     }
 
-    // REGLA 4b: URL contiene "ref=roaster" → éxito (Workana usa esto tras enviar)
-    if (currentUrl.includes('ref=roaster')) {
-      return { success: true, message: 'Propuesta enviada (ref=roaster en URL)', url: currentUrl, pageState };
-    }
+    // =============================================
+    // TODO LO DEMÁS → FALLO (con diagnóstico detallado)
+    // =============================================
 
-    // REGLA 4c: URL cambió a página de proyecto (sin /bid/) Y formulario desapareció
-    // SOLO si tenemos evidencia positiva: no hay textarea Y no hay submit Y no hay error
-    if (currentUrl !== formUrl && !pageState.hasVisibleTextarea && !pageState.hasSubmitBtn && !pageState.hasValidationError) {
-      // Verificar que NO estamos en una página de error o redirección genérica
-      const hasPositiveSignal = await page.evaluate(() => {
-        const text = document.body?.innerText?.toLowerCase() || '';
-        // Debe tener contenido del proyecto (título, descripción) o mensaje de éxito
-        return text.includes('propuesta') || text.includes('proposal') ||
-          text.includes('presupuesto') || text.includes('budget') ||
-          text.includes('proyecto') || text.includes('project');
-      });
-      if (hasPositiveSignal) {
-        return { success: true, message: 'URL cambió y formulario desapareció (probable éxito)', url: currentUrl, pageState };
-      }
-    }
-
-    // REGLA 5: Default → failure (CONSERVADOR — prefiere falso negativo a falso positivo)
-    // Capturar texto de la página para diagnosticar qué pasó
+    // Capturar texto de la página para diagnosticar
     const bodySnippet = await page.evaluate(() => {
       return (document.body?.innerText || '').substring(0, 2000);
     }).catch(() => '');
-    return { success: false, message: 'No se pudo confirmar el envío', url: currentUrl, pageState, bodySnippet };
+
+    // Mensaje descriptivo según lo que vemos
+    let failMessage;
+    if (pageState.hasValidationError) {
+      failMessage = 'Error de validación del formulario';
+    } else if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn) {
+      failMessage = 'Formulario sigue visible con botón submit — no se envió';
+    } else if (pageState.hasVisibleTextarea) {
+      failMessage = 'Formulario sigue visible (sin botón submit) — submit no navegó';
+    } else if (currentUrl === formUrl) {
+      failMessage = 'URL no cambió y formulario no visible — estado desconocido';
+    } else {
+      failMessage = `URL cambió a ${currentUrl} pero SIN confirmación explícita de éxito`;
+    }
+
+    return { success: false, message: failMessage, url: currentUrl, pageState, bodySnippet };
   }
 
   // =============================================

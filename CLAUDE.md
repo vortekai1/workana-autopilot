@@ -254,17 +254,18 @@ Workana usa **micro-frontends (MFE)** — el contenido se renderiza con JavaScri
 14. Verificar resultado con reglas conservadoras
 
 ### Compatibilidad MFE — Técnicas clave:
-- **Native setter**: `Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set` + dispatch `input`/`change`/`blur` events. El `el.value = ...` directo NO actualiza el estado del framework → submit falla silenciosamente.
+- **`execCommand('insertText')`**: Inserta texto a través del pipeline del navegador — TODOS los frameworks MFE (React/Vue/Angular) lo reconocen. Mucho más fiable que `el.value = ...` o native setters que pueden fallar silenciosamente.
 - **`page.select()`**: Puppeteer nativo para selects (task scopes). `sel.value = ...` no dispara eventos del framework.
 - **`page.click()`**: Click nativo de Puppeteer para submit (simula mouseover→mousedown→mouseup→click). Más fiable que `el.click()` programático.
 - **NUNCA `form.submit()`**: Bypasea validación del cliente, causa falsos positivos.
+- **Pre-submit validation**: Verifica que los campos tienen contenido en el DOM antes de clickar submit. Si están vacíos → ABORT inmediato.
 
-### Detección de éxito (conservadora):
+### Detección de éxito (ULTRA-CONSERVADORA — solo 3 vías):
 - Texto explícito: "propuesta enviada", "felicitaciones", etc. → éxito
 - "ya has enviado" → éxito
-- URL contiene `/inbox/` o `ref=roaster` → éxito
-- URL cambió + formulario desapareció + señal positiva → probable éxito
-- **Default → fallo** (prefiere falso negativo a falso positivo)
+- URL contiene `/inbox/` → éxito
+- **TODO lo demás → FALLO** (prefiere falso negativo a falso positivo)
+- NO hay heurísticas de "URL cambió" o "formulario desapareció" — causaban falsos positivos masivos
 
 ## Dashboard (React + Vite + Tailwind)
 
