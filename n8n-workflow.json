@@ -66,7 +66,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ categories: $('CONFIG').item.json.SEARCH_CATEGORIES, pages: parseInt($('CONFIG').item.json.SEARCH_PAGES), language: 'es' }) }}",
         "options": {
-          "timeout": 120000
+          "timeout": 300000
         }
       },
       "id": "scrape-projects",
