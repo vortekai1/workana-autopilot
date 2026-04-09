@@ -2,11 +2,25 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { getStartOfDay, getStartOfWeek, getStartOfMonth, getDaysAgo } from '../utils/formatters'
 
+// Same seeded random as n8n workflow — deterministic weekly target
+function seededRandom(seed) {
+  const x = Math.sin(seed * 9999) * 10000
+  return x - Math.floor(x)
+}
+
+function getWeeklyTarget() {
+  const now = new Date()
+  const oneJan = new Date(now.getFullYear(), 0, 1)
+  const weekNumber = Math.ceil(((now - oneJan) / 86400000 + oneJan.getDay() + 1) / 7)
+  const weekSeed = now.getFullYear() * 100 + weekNumber
+  return Math.floor(50 + seededRandom(weekSeed) * (60 - 50 + 1))
+}
+
 export function useStats() {
   const [stats, setStats] = useState({
     proposalsToday: 0,
     proposalsWeek: 0,
-    weeklyTarget: 55,
+    weeklyTarget: getWeeklyTarget(),
     wonProjects: 0,
     projectedRevenue: 0,
     retryPending: 0,
@@ -90,7 +104,7 @@ export function useStats() {
       setStats({
         proposalsToday: todayRes.count || 0,
         proposalsWeek: weekRes.count || 0,
-        weeklyTarget: 55,
+        weeklyTarget: getWeeklyTarget(),
         wonProjects: wonRes.count || 0,
         projectedRevenue: revenue,
         retryPending: retryRes.count || 0,

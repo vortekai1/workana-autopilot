@@ -11,22 +11,12 @@ class BrowserManager {
     this.headless = headless;
     this.browser = null;
     this.loggedIn = false;
+    this._launching = false; // Prevent concurrent launches
+    this._operationQueue = Promise.resolve(); // Mutex for sequential operations
   }
 
   async init() {
-    this.browser = await puppeteer.launch({
-      headless: this.headless ? 'new' : false,
-      userDataDir: this.userDataDir,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--window-size=1920,1080',
-        '--lang=es-ES',
-      ],
-      defaultViewport: { width: 1920, height: 1080 },
-    });
+    await this._launchBrowser();
 
     // Cerrar browser al salir
     process.on('SIGINT', () => this.close());
@@ -35,18 +25,80 @@ class BrowserManager {
     return this.browser;
   }
 
+  async _launchBrowser() {
+    if (this._launching) return;
+    this._launching = true;
+
+    try {
+      if (this.browser) {
+        try { await this.browser.close(); } catch (_) {}
+        this.browser = null;
+      }
+
+      this.browser = await puppeteer.launch({
+        headless: this.headless ? 'new' : false,
+        userDataDir: this.userDataDir,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-dev-shm-usage',
+          '--window-size=1920,1080',
+          '--lang=es-ES',
+        ],
+        defaultViewport: { width: 1920, height: 1080 },
+      });
+
+      // Auto-recovery: si el browser se desconecta, re-lanzar
+      this.browser.on('disconnected', () => {
+        console.error('[Browser] Chromium desconectado — re-lanzando...');
+        this.browser = null;
+        this.loggedIn = false;
+        this._launching = false;
+        this._launchBrowser().catch(err => {
+          console.error('[Browser] Error re-lanzando:', err.message);
+        });
+      });
+
+      console.log('[Browser] Chromium lanzado correctamente');
+    } finally {
+      this._launching = false;
+    }
+  }
+
+  // Ensure browser is alive, re-launch if needed
+  async _ensureBrowser() {
+    if (!this.browser || !this.browser.connected) {
+      console.log('[Browser] Browser no disponible, re-lanzando...');
+      await this._launchBrowser();
+    }
+  }
+
   isRunning() {
     return this.browser?.connected || false;
   }
 
   async close() {
     if (this.browser) {
-      await this.browser.close();
+      try { await this.browser.close(); } catch (_) {}
       this.browser = null;
     }
   }
 
+  // Mutex: serializa operaciones de Puppeteer para evitar concurrencia
+  // Esto previene que dos requests simultáneas sobrecargen Chromium
+  // o disparen anti-detección por actividad paralela
+  enqueue(fn) {
+    const op = this._operationQueue.then(() => fn()).catch(err => {
+      console.error('[Browser] Error en operación encolada:', err.message);
+      throw err;
+    });
+    this._operationQueue = op.catch(() => {}); // No propagar al siguiente
+    return op;
+  }
+
   async newPage() {
+    await this._ensureBrowser();
     const page = await this.browser.newPage();
 
     // Pool de User Agents reales — rota por día (no por petición, sería sospechoso)
@@ -186,9 +238,14 @@ class BrowserManager {
         }
       }
 
-      if (passSelector) {
-        await this.humanType(page, passSelector, this.password);
+      if (!passSelector) {
+        return {
+          success: false,
+          message: 'No se encontró campo de contraseña. Estructura del login puede haber cambiado.',
+        };
       }
+
+      await this.humanType(page, passSelector, this.password);
 
       await this.randomDelay(1000, 2000);
 

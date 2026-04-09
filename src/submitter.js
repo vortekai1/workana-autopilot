@@ -142,7 +142,7 @@ class ProposalSubmitter {
       // Verificar "Área protegida" antes de submit (puede aparecer durante interacción)
       const preSubmitProtected = await this._handleProtectedArea(page, log);
       if (preSubmitProtected) {
-        log('8b. "Área protegida" resuelta antes de submit, esperando formulario...');
+        log('9a. "Área protegida" resuelta antes de submit, esperando formulario...');
         await this.bm.randomDelay(3000, 5000);
         // Esperar que el formulario vuelva a cargar
         await page.waitForFunction(
@@ -150,6 +150,19 @@ class ProposalSubmitter {
           { timeout: 20000 }
         ).catch(() => null);
         await this.bm.randomDelay(2000, 3000);
+
+        // RE-RELLENAR campos — el redirect de "Área protegida" puede vaciar el formulario
+        log('9a. Re-rellenando campos tras "Área protegida"...');
+        const reTextFilled = await this._fillProposalText(page, proposalText);
+        log(`9a. Re-texto: ${reTextFilled}`);
+        await this.bm.randomDelay(500, 1000);
+        const reBudgetFilled = await this._fillBudget(page, budget);
+        log(`9a. Re-presupuesto: ${reBudgetFilled}`);
+        await this.bm.randomDelay(500, 1000);
+        await this._selectSkills(page);
+        await this.bm.randomDelay(500, 1000);
+        await this._fillTaskScopes(page);
+        await this.bm.randomDelay(500, 1000);
       }
 
       // 9b. Verificar que los campos se rellenaron correctamente en el estado del framework
@@ -446,9 +459,23 @@ class ProposalSubmitter {
 
   async _selectSkills(page) {
     const count = await page.evaluate(() => {
-      // Solo checkboxes de habilidades — lo más seguro
-      const checkboxes = [...document.querySelectorAll('input[type="checkbox"]')]
+      // Solo checkboxes de habilidades DENTRO del formulario de propuesta
+      // Filtra por: estar dentro de <form>, tener name con "skill" o "bid",
+      // o estar en un contenedor con texto de "habilidades"/"skills"
+      const form = document.querySelector('form');
+      const scope = form || document;
+
+      const checkboxes = [...scope.querySelectorAll('input[type="checkbox"]')]
         .filter(cb => {
+          // Excluir checkboxes de cookies, newsletter, términos, etc.
+          const name = (cb.name || '').toLowerCase();
+          const id = (cb.id || '').toLowerCase();
+          const parentText = (cb.closest('label, div, li')?.textContent || '').toLowerCase();
+
+          // Excluir explícitamente checkboxes que NO son de skills
+          if (name.includes('cookie') || name.includes('terms') || name.includes('newsletter') ||
+              name.includes('accept') || name.includes('agree')) return false;
+
           const label = cb.closest('label') || cb.parentElement;
           return !cb.checked && (cb.offsetHeight > 0 || (label && label.offsetHeight > 0));
         });
