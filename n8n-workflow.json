@@ -330,7 +330,7 @@
         "specifyBody": "json",
         "jsonBody": "={\n  \"url\": \"{{$('Preparar Propuesta').item.json.project.workana_url}}\",\n  \"text\": {{JSON.stringify($('Preparar Propuesta').item.json.proposal_text)}},\n  \"budget\": {{$('Preparar Propuesta').item.json.budget_suggested || 'null'}},\n  \"delivery_days\": {{$('Preparar Propuesta').item.json.delivery_days || 'null'}}\n}",
         "options": {
-          "timeout": 300000
+          "timeout": 600000
         }
       },
       "id": "auto-submit",

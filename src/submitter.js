@@ -4,7 +4,7 @@ class ProposalSubmitter {
   }
 
   async submit(projectUrl, proposalText, budget, deliveryDays, debug = true) {
-    const page = await this.bm.newPage();
+    let page = await this.bm.newPage();
     const startTime = Date.now();
     const log = (msg) => console.log(`[Submitter] ${msg}`);
     const screenshots = {};
@@ -19,6 +19,7 @@ class ProposalSubmitter {
       // BUCLE DE REINTENTOS — hasta MAX_SUBMIT_ATTEMPTS intentos completos
       // Cada intento: navegar → rellenar → enviar → verificar
       // Si el resultado es ambiguo, re-visita para confirmar antes de reintentar
+      // Excepciones (timeouts, page crashes) NO rompen el bucle
       // =============================================
 
       let lastResult = null;
@@ -29,49 +30,82 @@ class ProposalSubmitter {
           await this.bm.randomDelay(5000, 10000); // Delay entre reintentos
         }
 
-        const attemptResult = await this._singleSubmitAttempt(
-          page, projectUrl, proposalText, budget, deliveryDays, debug, screenshots, log, attempt
-        );
+        try {
+          // Verificar que la página sigue funcional (puede haberse crasheado)
+          try {
+            await page.evaluate(() => true);
+          } catch (_pageErr) {
+            log('Página rota — creando nueva...');
+            try { await page.close(); } catch (_) {}
+            page = await this.bm.newPage();
+          }
 
-        if (attemptResult.success) {
-          attemptResult.elapsed_ms = Date.now() - startTime;
-          attemptResult.attempt = attempt;
-          if (debug) attemptResult.screenshots = screenshots;
-          log(`✅ Éxito en intento ${attempt}/${MAX_SUBMIT_ATTEMPTS} (${attemptResult.elapsed_ms}ms)`);
-          log(`=== FIN SUBMIT ===`);
-          return attemptResult;
-        }
+          const attemptResult = await this._singleSubmitAttempt(
+            page, projectUrl, proposalText, budget, deliveryDays, debug, screenshots, log, attempt
+          );
 
-        lastResult = attemptResult;
-        log(`❌ Intento ${attempt}/${MAX_SUBMIT_ATTEMPTS} fallido: ${attemptResult.message}`);
+          if (attemptResult.success) {
+            attemptResult.elapsed_ms = Date.now() - startTime;
+            attemptResult.attempt = attempt;
+            if (debug) attemptResult.screenshots = screenshots;
+            log(`✅ Éxito en intento ${attempt}/${MAX_SUBMIT_ATTEMPTS} (${attemptResult.elapsed_ms}ms)`);
+            log(`=== FIN SUBMIT ===`);
+            return attemptResult;
+          }
 
-        // Si es un error terminal (no tiene sentido reintentar), salir
-        if (attemptResult._terminal) {
-          log('Error terminal — no se reintenta');
-          break;
+          lastResult = attemptResult;
+          log(`❌ Intento ${attempt}/${MAX_SUBMIT_ATTEMPTS} fallido: ${attemptResult.message}`);
+
+          // Si es un error terminal (no tiene sentido reintentar), salir
+          if (attemptResult._terminal) {
+            log('Error terminal — no se reintenta');
+            break;
+          }
+
+        } catch (attemptError) {
+          // Excepción dura (timeout, page crash, network) — NO rompe el bucle
+          log(`💥 Excepción en intento ${attempt}: ${attemptError.message}`);
+          lastResult = { success: false, message: `Excepción en intento ${attempt}: ${attemptError.message}` };
+
+          // Recrear página para el siguiente intento
+          try { await page.close(); } catch (_) {}
+          try {
+            page = await this.bm.newPage();
+          } catch (newPageErr) {
+            log(`No se pudo crear nueva página: ${newPageErr.message}`);
+            break; // Sin página no podemos continuar
+          }
         }
 
         // Antes de reintentar: verificar si realmente se envió (re-visitar proyecto)
         if (attempt < MAX_SUBMIT_ATTEMPTS) {
           log('Verificando si se envió antes de reintentar...');
-          const alreadySent = await this._verifyAlreadySent(page, projectUrl, log);
-          if (alreadySent) {
-            const result = {
-              success: true,
-              message: `Propuesta enviada (verificado en reintento ${attempt + 1})`,
-              attempt,
-              verified: true,
-              elapsed_ms: Date.now() - startTime,
-            };
-            if (debug) result.screenshots = screenshots;
-            log(`✅ Verificación confirmó envío — no es necesario reintentar`);
-            log(`=== FIN SUBMIT ===`);
-            return result;
+          try {
+            const alreadySent = await this._verifyAlreadySent(page, projectUrl, log);
+            if (alreadySent) {
+              const result = {
+                success: true,
+                message: `Propuesta enviada (verificado en reintento ${attempt + 1})`,
+                attempt,
+                verified: true,
+                elapsed_ms: Date.now() - startTime,
+              };
+              if (debug) result.screenshots = screenshots;
+              log(`✅ Verificación confirmó envío — no es necesario reintentar`);
+              log(`=== FIN SUBMIT ===`);
+              return result;
+            }
+          } catch (verifyErr) {
+            log(`Error en verificación: ${verifyErr.message}`);
+            // Recrear página si la verificación crasheó
+            try { await page.close(); } catch (_) {}
+            try { page = await this.bm.newPage(); } catch (_) {}
           }
         }
       }
 
       // Todos los intentos fallaron
+      if (!lastResult) lastResult = { success: false, message: 'Todos los intentos fallaron' };
       lastResult.elapsed_ms = Date.now() - startTime;
       lastResult.attempts = MAX_SUBMIT_ATTEMPTS;
       if (debug) lastResult.screenshots = screenshots;
@@ -82,7 +116,7 @@ class ProposalSubmitter {
       log(`ERROR FATAL: ${error.message}`);
       return { success: false, message: `Error fatal: ${error.message}`, elapsed_ms: Date.now() - startTime, screenshots: debug ? screenshots : undefined };
     } finally {
-      await page.close();
+      try { await page.close(); } catch (_) {}
     }
   }
 
@@ -365,7 +399,7 @@ class ProposalSubmitter {
           bodyText.includes('ya enviaste') ||
           bodyText.includes('already sent') ||
           bodyText.includes('propuesta enviada') ||
-          bodyText.includes('tu propuesta');
+          bodyText.includes('tu propuesta ha sido');
       });
 
       if (sent) {
@@ -899,7 +933,7 @@ class ProposalSubmitter {
             bodyText.includes('ya enviaste') ||
             bodyText.includes('already sent') ||
             bodyText.includes('propuesta enviada') ||
-            bodyText.includes('tu propuesta');
+            bodyText.includes('tu propuesta ha sido');
         });
 
         if (verified) {
