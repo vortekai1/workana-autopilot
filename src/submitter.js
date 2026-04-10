@@ -384,6 +384,7 @@ class ProposalSubmitter {
   // =============================================
 
   async _verifyAlreadySent(page, projectUrl, log) {
+    // 1. Verificar en la página del proyecto
     try {
       await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
       await this.bm.randomDelay(3000, 5000);
@@ -391,21 +392,43 @@ class ProposalSubmitter {
         () => document.body.innerText.length > 500,
         { timeout: 15000 }
       ).catch(() => {});
-      // Espera extra para MFE — el botón "Enviar propuesta" puede tardar en renderizar
       await this.bm.randomDelay(2000, 4000);
 
       const result = await this._checkIfAlreadyApplied(page);
-
       if (result.sent) {
         log(`✅ Re-visita confirmó envío: ${result.reason}`);
-      } else {
-        log(`Re-visita: no hay confirmación (${result.reason}) — se reintentará`);
+        return true;
       }
-      return result.sent;
+      log(`Re-visita proyecto: ${result.reason}`);
     } catch (e) {
-      log(`Error verificando envío: ${e.message}`);
-      return false;
+      log(`Error verificando en proyecto: ${e.message}`);
     }
+
+    // 2. Verificar en /my-proposals (más fiable)
+    try {
+      const projectSlug = projectUrl.split('/job/')[1]?.split('?')[0]?.split('/')[0] || '';
+      if (projectSlug) {
+        log('Verificando en /my-proposals...');
+        await page.goto('https://www.workana.com/worker/proposals', { waitUntil: 'networkidle2', timeout: 30000 });
+        await this.bm.randomDelay(2000, 4000);
+        await page.waitForFunction(() => document.body.innerText.length > 500, { timeout: 15000 }).catch(() => {});
+
+        const found = await page.evaluate((slug) => {
+          const links = [...document.querySelectorAll('a')];
+          return links.some(a => (a.href || '').includes(slug));
+        }, projectSlug);
+
+        if (found) {
+          log('✅ Proyecto encontrado en /my-proposals — confirmado enviado');
+          return true;
+        }
+        log('Proyecto NO encontrado en /my-proposals — se reintentará');
+      }
+    } catch (e) {
+      log(`Error verificando /my-proposals: ${e.message}`);
+    }
+
+    return false;
   }
 
   // =============================================
@@ -759,17 +782,11 @@ class ProposalSubmitter {
   // =============================================
 
   async _fillBudget(page, budget) {
-    // Detectar si es proyecto por horas o fijo
-    const isHourly = await page.evaluate(() => {
-      const bodyText = document.body.innerText.toLowerCase();
-      // Si dice "valor hora" o "hourly" es por horas
-      return bodyText.includes('valor hora') || bodyText.includes('hourly') ||
-        bodyText.includes('por hora') || bodyText.includes('per hour');
-    });
-
-    // Si es por horas, siempre 40€/h. Si es fijo, usar el budget de la propuesta
-    const amount = isHourly ? 40 : budget;
-    console.log(`[Submitter] Budget: ${isHourly ? 'HOURLY (40€/h)' : `FIXED (${budget})`} → ${amount}`);
+    // Usar siempre el budget que viene del caller (n8n calcula el precio correcto)
+    // La detección "hourly" por texto de la página causaba falsos positivos:
+    // el formulario de Workana SIEMPRE muestra "Valor/hora" aunque sea proyecto fijo
+    const amount = budget;
+    console.log(`[Submitter] Budget: ${amount}`);
 
     // Workana usa bid[amount] como campo principal (required)
     const selectors = [
@@ -805,7 +822,7 @@ class ProposalSubmitter {
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('blur', { bubbles: true }));
         });
-        return `${amount} (${isHourly ? 'hourly' : 'fixed'})`;
+        return `${amount}`;
       }
     }
     console.log('[Submitter] Budget: no encontrado');
@@ -971,7 +988,6 @@ class ProposalSubmitter {
           () => document.body.innerText.length > 500,
           { timeout: 15000 }
         ).catch(() => {});
-        // Espera extra para MFE — el botón puede tardar en renderizar
         await this.bm.randomDelay(2000, 4000);
 
         const checkResult = await this._checkIfAlreadyApplied(page);
@@ -980,9 +996,43 @@ class ProposalSubmitter {
           console.log(`[Submitter] ✅ Verificación post-submit confirmó envío: ${checkResult.reason}`);
           return { success: true, message: `Propuesta enviada (${checkResult.reason})`, url: currentUrl, pageState, verified: true };
         }
-        console.log(`[Submitter] Re-visita no confirmó envío: ${checkResult.reason}`);
+        console.log(`[Submitter] Re-visita proyecto no confirmó: ${checkResult.reason}`);
       } catch (e) {
-        console.log(`[Submitter] Error en verificación post-submit: ${e.message}`);
+        console.log(`[Submitter] Error en verificación proyecto: ${e.message}`);
+      }
+
+      // Verificación extra: ir a /my-proposals y buscar si el proyecto aparece
+      console.log('[Submitter] Verificando en /my-proposals...');
+      try {
+        const projectSlug = projectUrl.split('/job/')[1]?.split('?')[0]?.split('/')[0] || '';
+        if (projectSlug) {
+          await page.goto('https://www.workana.com/worker/proposals', { waitUntil: 'networkidle2', timeout: 30000 });
+          await this.bm.randomDelay(2000, 4000);
+          await page.waitForFunction(
+            () => document.body.innerText.length > 500,
+            { timeout: 15000 }
+          ).catch(() => {});
+
+          const foundInProposals = await page.evaluate((slug) => {
+            // Buscar enlaces que contengan el slug del proyecto
+            const links = [...document.querySelectorAll('a')];
+            const match = links.find(a => (a.href || '').includes(slug));
+            if (match) {
+              return { found: true, text: (match.textContent || '').trim().substring(0, 100), href: match.href };
+            }
+            // También buscar el título del proyecto en el texto
+            const bodyText = document.body.innerText || '';
+            return { found: bodyText.toLowerCase().includes(slug.replace(/-/g, ' ').substring(0, 30).toLowerCase()), text: 'body text match' };
+          }, projectSlug);
+
+          if (foundInProposals.found) {
+            console.log(`[Submitter] ✅ Proyecto encontrado en /my-proposals: ${foundInProposals.text}`);
+            return { success: true, message: `Propuesta enviada (verificado en mis propuestas)`, url: currentUrl, pageState, verified: true };
+          }
+          console.log('[Submitter] Proyecto NO encontrado en /my-proposals');
+        }
+      } catch (e) {
+        console.log(`[Submitter] Error verificando /my-proposals: ${e.message}`);
       }
     }
 
