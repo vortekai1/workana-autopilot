@@ -162,7 +162,7 @@ app.get('/debug-form', async (req, res) => {
 
         // 2. Buscar y clickar botón de propuesta
         let applyClicked = false;
-        const textPatterns = ['Enviar una propuesta', 'Enviar propuesta', 'Send a proposal'];
+        const textPatterns = ['Envía una propuesta', 'Enviar una propuesta', 'Envía propuesta', 'Enviar propuesta', 'Send a proposal'];
         for (const text of textPatterns) {
           applyClicked = await page.evaluate(txt => {
             const el = [...document.querySelectorAll('a, button')].find(e =>

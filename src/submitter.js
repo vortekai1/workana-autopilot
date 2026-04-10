@@ -430,8 +430,10 @@ class ProposalSubmitter {
 
       // 2. Comprobar si el botón "Enviar propuesta" está presente
       const applyTexts = [
-        'enviar una propuesta', 'enviar propuesta', 'send a proposal',
-        'send proposal', 'aplicar a este proyecto', 'apply to this project',
+        'envía una propuesta', 'enviar una propuesta',
+        'envía propuesta', 'enviar propuesta',
+        'send a proposal', 'send proposal',
+        'aplicar a este proyecto', 'apply to this project',
       ];
       const allClickable = [...document.querySelectorAll('a, button, [role="button"]')];
       const applyButton = allClickable.find(el => {
@@ -553,7 +555,9 @@ class ProposalSubmitter {
 
   async _clickApplyButton(page) {
     const textPatterns = [
+      'Envía una propuesta',
       'Enviar una propuesta',
+      'Envía propuesta',
       'Enviar propuesta',
       'Send a proposal',
       'Send proposal',
