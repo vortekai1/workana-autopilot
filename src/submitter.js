@@ -311,14 +311,12 @@ class ProposalSubmitter {
     if (debug) screenshots[`beforeSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
     // 10. Enviar formulario
-    // Estrategia: primero requestSubmit() (más fiable con MFE, no depende de coordenadas),
-    // luego click nativo como fallback
+    // Estrategia: click nativo en el botón submit primero (más fiable — simula acción real del usuario),
+    // luego requestSubmit() como fallback solo si el click no funcionó.
+    // NOTA: requestSubmit() puede fallar si hay múltiples forms en la página (ej: chat lateral)
+    // y activar el form incorrecto, causando redirección a /jobs.
     log('10. Enviando formulario...');
 
-    // 10a. Primero intentar form.requestSubmit() — más fiable porque:
-    // - No depende de coordenadas visuales (no le afectan overlays/banners)
-    // - Dispara validación HTML5 igual que un click en submit
-    // - Compatible con frameworks MFE
     const submitInfo = await this._findSubmitButton(page);
     log(`10. Submit target: ${JSON.stringify(submitInfo)}`);
 
@@ -327,38 +325,30 @@ class ProposalSubmitter {
       return { success: false, message: 'No se encontró botón submit ni formulario', formInfo, _terminal: false };
     }
 
-    // Scroll al fondo y cerrar cookies antes de submit
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    // Scroll al botón submit y cerrar cookies antes de submit
+    if (submitInfo.found) {
+      await page.evaluate(() => {
+        const btn = document.querySelector('[data-wk-submit="1"]');
+        if (btn) btn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
+    } else {
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    }
     await this.bm.randomDelay(1000, 2000);
     await this._dismissCookieConsent(page);
     await this.bm.randomDelay(500, 800);
 
     let submitMethod = 'none';
 
-    // Intentar requestSubmit primero
-    if (submitInfo.hasForm) {
-      const rsResult = await page.evaluate(() => {
-        // Encontrar el form que contiene bid[content]
-        const textarea = document.querySelector('textarea[name="bid[content]"]');
-        const form = textarea ? textarea.closest('form') : document.querySelector('form');
-        if (form && typeof form.requestSubmit === 'function') {
-          try { form.requestSubmit(); return 'ok'; } catch (e) { return `error: ${e.message}`; }
-        }
-        return form ? 'requestSubmit not available' : 'no form';
-      });
-      log(`10a. requestSubmit: ${rsResult}`);
-      if (rsResult === 'ok') submitMethod = 'requestSubmit';
-    }
-
-    // Si requestSubmit no funcionó, intentar click nativo
-    if (submitMethod === 'none' && submitInfo.found) {
+    // 10a. Prioridad: click nativo en el botón submit (simula usuario real)
+    if (submitInfo.found) {
       try {
         await page.click('[data-wk-submit="1"]');
         submitMethod = 'nativeClick';
-        log('10b. Click nativo OK');
+        log('10a. Click nativo en botón submit OK');
       } catch (e) {
-        // Fallback: click programático
-        log(`10b. Click nativo falló (${e.message}), usando programático...`);
+        // Fallback: click programático en el mismo botón
+        log(`10a. Click nativo falló (${e.message}), usando programático...`);
         await page.evaluate(() => {
           const btn = document.querySelector('[data-wk-submit="1"]');
           if (btn) btn.click();
@@ -369,7 +359,7 @@ class ProposalSubmitter {
 
     log(`10. Método de submit: ${submitMethod}`);
 
-    if (submitMethod === 'none') {
+    if (submitMethod === 'none' && !submitInfo.hasForm) {
       if (debug) screenshots[`noSubmitBtn_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
       return { success: false, message: 'No se pudo enviar el formulario', formInfo, _terminal: false };
     }
@@ -378,39 +368,47 @@ class ProposalSubmitter {
     log('11. Esperando resultado (navegación o cambio en página)...');
     await this._waitForSubmitResult(page);
 
-    // 11b. Si la URL no cambió y usamos requestSubmit, intentar click como fallback
-    if (page.url() === formUrl && submitMethod === 'requestSubmit' && submitInfo.found) {
-      log('11b. URL no cambió tras requestSubmit — intentando click nativo...');
-      try {
-        await page.click('[data-wk-submit="1"]');
-        log('11b. Click nativo fallback OK');
-      } catch (e) {
-        await page.evaluate(() => {
-          const btn = document.querySelector('[data-wk-submit="1"]');
-          if (btn) btn.click();
-        });
-        log('11b. Click programático fallback');
-      }
-
-      await this._waitForSubmitResult(page);
-    }
-
-    // 11c. Si TODAVÍA no cambió, intentar requestSubmit como último recurso
-    if (page.url() === formUrl && submitMethod !== 'requestSubmit') {
-      log('11c. URL no cambió — intentando form.requestSubmit()...');
-      const requestSubmitResult = await page.evaluate(() => {
+    // 11b. Si la URL no cambió, intentar requestSubmit como fallback
+    // IMPORTANTE: Solo usar requestSubmit del form que CONTIENE el textarea bid[content]
+    // para evitar enviar el form del chat lateral
+    if (page.url() === formUrl) {
+      log('11b. URL no cambió — intentando form.requestSubmit() como fallback...');
+      const rsResult = await page.evaluate(() => {
+        // Buscar ESPECÍFICAMENTE el form que contiene bid[content]
         const textarea = document.querySelector('textarea[name="bid[content]"]');
-        const form = textarea ? textarea.closest('form') : document.querySelector('form');
-        if (form && typeof form.requestSubmit === 'function') {
-          try { form.requestSubmit(); return 'requestSubmit OK'; } catch (e) { return `requestSubmit error: ${e.message}`; }
+        if (!textarea) return 'no textarea bid[content]';
+        const form = textarea.closest('form');
+        if (!form) return 'textarea no está dentro de un form';
+        // Verificar que es el form correcto (debe tener action relacionado con bid/proposal)
+        const action = (form.action || '').toLowerCase();
+        const formId = (form.id || '').toLowerCase();
+        const isBidForm = action.includes('bid') || action.includes('proposal') ||
+                          action.includes('messages') || formId.includes('bid') ||
+                          form.querySelector('input[name="bid[amount]"]') !== null;
+        if (!isBidForm) return `form encontrado pero no parece ser de propuesta (action=${form.action}, id=${form.id})`;
+        if (typeof form.requestSubmit === 'function') {
+          try { form.requestSubmit(); return 'ok'; } catch (e) { return `error: ${e.message}`; }
         }
-        return form ? 'requestSubmit not available' : 'no form found';
+        return 'requestSubmit not available';
       });
-      log(`11c. Resultado: ${requestSubmitResult}`);
+      log(`11b. requestSubmit fallback: ${rsResult}`);
 
-      if (requestSubmitResult === 'requestSubmit OK') {
+      if (rsResult === 'ok') {
         await this._waitForSubmitResult(page);
       }
+    }
+
+    // 11c. Si TODAVÍA no cambió, intentar click nativo de nuevo (por si overlay se fue)
+    if (page.url() === formUrl && submitInfo.found) {
+      log('11c. URL aún no cambió — reintentando click nativo...');
+      try {
+        await this._dismissCookieConsent(page);
+        await page.click('[data-wk-submit="1"]');
+        log('11c. Click nativo reintento OK');
+      } catch (e) {
+        log(`11c. Click reintento falló: ${e.message}`);
+      }
+      await this._waitForSubmitResult(page);
     }
 
     const finalUrl = page.url();
@@ -1065,6 +1063,12 @@ class ProposalSubmitter {
     // ÉXITO 3: URL redirigió a /inbox/ (comportamiento real de Workana tras enviar)
     if (currentUrl.includes('/inbox/')) {
       return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
+    }
+
+    // FALLO CLARO: Redirección a página de búsqueda de proyectos (/jobs)
+    // Esto ocurre cuando el submit no se procesó correctamente (form incorrecto, sesión expirada, etc.)
+    if (currentUrl.includes('/jobs') && !currentUrl.includes('/jobs/')) {
+      return { success: false, message: `Submit redirigió a búsqueda de proyectos (${currentUrl}) — el formulario no se envió correctamente`, url: currentUrl, pageState };
     }
 
     // Capturar bodySnippet INMEDIATAMENTE (ANTES de verificación)
