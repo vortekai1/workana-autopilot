@@ -252,7 +252,10 @@ class ProposalSubmitter {
       return { success: false, message: `Navegación inesperada tras portfolio: ${page.url()}`, formInfo, _terminal: false };
     }
 
-    // NO rellenamos delivery time (no obligatorio)
+    // 8b. Rellenar delivery time
+    const deliveryFilled = await this._fillDeliveryTime(page, deliveryDays);
+    log(`8b. Delivery time: ${deliveryFilled}`);
+    await this.bm.randomDelay(500, 1000);
 
     // 9. Rellenar task scopes (Workana exige alcance para cada tarea)
     const tasksFilled = await this._fillTaskScopes(page);
@@ -409,7 +412,7 @@ class ProposalSubmitter {
       const projectSlug = projectUrl.split('/job/')[1]?.split('?')[0]?.split('/')[0] || '';
       if (projectSlug) {
         log('Verificando en /my-proposals...');
-        await page.goto('https://www.workana.com/worker/proposals', { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto('https://www.workana.com/my_projects?type_company=worker', { waitUntil: 'networkidle2', timeout: 30000 });
         await this.bm.randomDelay(2000, 4000);
         await page.waitForFunction(() => document.body.innerText.length > 500, { timeout: 15000 }).catch(() => {});
 
@@ -673,35 +676,41 @@ class ProposalSubmitter {
 
   async _selectSkills(page) {
     const count = await page.evaluate(() => {
-      // Solo checkboxes de habilidades DENTRO del formulario de propuesta
-      // Filtra por: estar dentro de <form>, tener name con "skill" o "bid",
-      // o estar en un contenedor con texto de "habilidades"/"skills"
-      const form = document.querySelector('form');
-      const scope = form || document;
-
-      const checkboxes = [...scope.querySelectorAll('input[type="checkbox"]')]
-        .filter(cb => {
-          // Excluir checkboxes de cookies, newsletter, términos, etc.
-          const name = (cb.name || '').toLowerCase();
-          const id = (cb.id || '').toLowerCase();
-          const parentText = (cb.closest('label, div, li')?.textContent || '').toLowerCase();
-
-          // Excluir explícitamente checkboxes que NO son de skills
-          if (name.includes('cookie') || name.includes('terms') || name.includes('newsletter') ||
-              name.includes('accept') || name.includes('agree')) return false;
-
-          const label = cb.closest('label') || cb.parentElement;
-          return !cb.checked && (cb.offsetHeight > 0 || (label && label.offsetHeight > 0));
-        });
+      // Buscar checkboxes de skills (name="skill-*")
+      const skillCheckboxes = [...document.querySelectorAll('input[type="checkbox"][name^="skill-"]')]
+        .filter(cb => !cb.checked);
 
       let clicked = 0;
-      for (const cb of checkboxes) {
+      for (const cb of skillCheckboxes) {
         if (clicked >= 5) break;
-        const label = cb.closest('label') || cb.parentElement;
-        if (label && label.offsetHeight > 0) {
-          label.click();
+
+        // Estrategia 1: buscar label con for= que apunte al checkbox
+        const labelFor = cb.id ? document.querySelector(`label[for="${cb.id}"]`) : null;
+        if (labelFor && labelFor.offsetHeight > 0) {
+          labelFor.click();
           clicked++;
+          continue;
         }
+
+        // Estrategia 2: label ancestro
+        const labelAncestor = cb.closest('label');
+        if (labelAncestor && labelAncestor.offsetHeight > 0) {
+          labelAncestor.click();
+          clicked++;
+          continue;
+        }
+
+        // Estrategia 3: padre visible (custom UI con CSS)
+        const parent = cb.parentElement;
+        if (parent && parent.offsetHeight > 0) {
+          parent.click();
+          clicked++;
+          continue;
+        }
+
+        // Estrategia 4: click directo en el checkbox (aunque sea invisible, JS lo procesa)
+        cb.click();
+        clicked++;
       }
       return clicked;
     });
@@ -827,6 +836,37 @@ class ProposalSubmitter {
     }
     console.log('[Submitter] Budget: no encontrado');
     return false;
+  }
+
+  // =============================================
+  // RELLENAR DELIVERY TIME (bid[deliveryTime])
+  // =============================================
+
+  async _fillDeliveryTime(page, deliveryDays) {
+    if (!deliveryDays) return 'no proporcionado';
+
+    const input = await page.$('input[name="bid[deliveryTime]"]');
+    if (!input) {
+      console.log('[Submitter] DeliveryTime: campo no encontrado');
+      return 'campo no encontrado';
+    }
+
+    const text = `${deliveryDays} días`;
+    await input.click({ clickCount: 3 });
+    await this.bm.randomDelay(200, 400);
+    await page.keyboard.press('Backspace');
+    await this.bm.randomDelay(100, 200);
+    await input.evaluate((el, val) => {
+      el.focus();
+      document.execCommand('insertText', false, val);
+    }, text);
+    await this.bm.randomDelay(200, 400);
+    await input.evaluate(el => {
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+    });
+    console.log(`[Submitter] DeliveryTime: ${text}`);
+    return text;
   }
 
   // =============================================
@@ -1006,7 +1046,7 @@ class ProposalSubmitter {
       try {
         const projectSlug = projectUrl.split('/job/')[1]?.split('?')[0]?.split('/')[0] || '';
         if (projectSlug) {
-          await page.goto('https://www.workana.com/worker/proposals', { waitUntil: 'networkidle2', timeout: 30000 });
+          await page.goto('https://www.workana.com/my_projects?type_company=worker', { waitUntil: 'networkidle2', timeout: 30000 });
           await this.bm.randomDelay(2000, 4000);
           await page.waitForFunction(
             () => document.body.innerText.length > 500,
