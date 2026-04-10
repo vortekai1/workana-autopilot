@@ -310,59 +310,106 @@ class ProposalSubmitter {
 
     if (debug) screenshots[`beforeSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
 
-    // 10. Click en "Enviar propuesta/presupuesto"
-    const submitClicked = await this._clickSubmitButton(page);
-    log(`10. Submit clickeado: ${submitClicked}`);
+    // 10. Enviar formulario
+    // Estrategia: primero requestSubmit() (más fiable con MFE, no depende de coordenadas),
+    // luego click nativo como fallback
+    log('10. Enviando formulario...');
 
-    if (!submitClicked) {
+    // 10a. Primero intentar form.requestSubmit() — más fiable porque:
+    // - No depende de coordenadas visuales (no le afectan overlays/banners)
+    // - Dispara validación HTML5 igual que un click en submit
+    // - Compatible con frameworks MFE
+    const submitInfo = await this._findSubmitButton(page);
+    log(`10. Submit target: ${JSON.stringify(submitInfo)}`);
+
+    if (!submitInfo.found && !submitInfo.hasForm) {
       if (debug) screenshots[`noSubmitBtn_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-      return { success: false, message: 'No se encontró botón submit', formInfo, _terminal: false };
+      return { success: false, message: 'No se encontró botón submit ni formulario', formInfo, _terminal: false };
+    }
+
+    // Scroll al fondo y cerrar cookies antes de submit
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await this.bm.randomDelay(1000, 2000);
+    await this._dismissCookieConsent(page);
+    await this.bm.randomDelay(500, 800);
+
+    let submitMethod = 'none';
+
+    // Intentar requestSubmit primero
+    if (submitInfo.hasForm) {
+      const rsResult = await page.evaluate(() => {
+        // Encontrar el form que contiene bid[content]
+        const textarea = document.querySelector('textarea[name="bid[content]"]');
+        const form = textarea ? textarea.closest('form') : document.querySelector('form');
+        if (form && typeof form.requestSubmit === 'function') {
+          try { form.requestSubmit(); return 'ok'; } catch (e) { return `error: ${e.message}`; }
+        }
+        return form ? 'requestSubmit not available' : 'no form';
+      });
+      log(`10a. requestSubmit: ${rsResult}`);
+      if (rsResult === 'ok') submitMethod = 'requestSubmit';
+    }
+
+    // Si requestSubmit no funcionó, intentar click nativo
+    if (submitMethod === 'none' && submitInfo.found) {
+      try {
+        await page.click('[data-wk-submit="1"]');
+        submitMethod = 'nativeClick';
+        log('10b. Click nativo OK');
+      } catch (e) {
+        // Fallback: click programático
+        log(`10b. Click nativo falló (${e.message}), usando programático...`);
+        await page.evaluate(() => {
+          const btn = document.querySelector('[data-wk-submit="1"]');
+          if (btn) btn.click();
+        });
+        submitMethod = 'programmaticClick';
+      }
+    }
+
+    log(`10. Método de submit: ${submitMethod}`);
+
+    if (submitMethod === 'none') {
+      if (debug) screenshots[`noSubmitBtn_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+      return { success: false, message: 'No se pudo enviar el formulario', formInfo, _terminal: false };
     }
 
     // 11. Esperar resultado — navegación O cambio en la página
     log('11. Esperando resultado (navegación o cambio en página)...');
-    await Promise.race([
-      page.waitForNavigation({ timeout: 15000 }).catch(() => null),
-      page.waitForFunction(
-        () => {
-          const text = document.body.innerText.toLowerCase();
-          return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
-            text.includes('felicitaciones') || text.includes('proposal sent') ||
-            text.includes('especifique un alcance') || text.includes('campo obligatorio');
-        },
-        { timeout: 15000 }
-      ).catch(() => null),
-    ]);
-    await this.bm.randomDelay(2000, 3000);
+    await this._waitForSubmitResult(page);
 
-    // 11b. Si la URL no cambió, intentar form.requestSubmit() como ÚNICO fallback
-    // NUNCA usar form.submit() — bypasea validación y causa falsos positivos
-    if (page.url() === formUrl) {
-      log('11b. URL no cambió tras click — intentando form.requestSubmit()...');
+    // 11b. Si la URL no cambió y usamos requestSubmit, intentar click como fallback
+    if (page.url() === formUrl && submitMethod === 'requestSubmit' && submitInfo.found) {
+      log('11b. URL no cambió tras requestSubmit — intentando click nativo...');
+      try {
+        await page.click('[data-wk-submit="1"]');
+        log('11b. Click nativo fallback OK');
+      } catch (e) {
+        await page.evaluate(() => {
+          const btn = document.querySelector('[data-wk-submit="1"]');
+          if (btn) btn.click();
+        });
+        log('11b. Click programático fallback');
+      }
+
+      await this._waitForSubmitResult(page);
+    }
+
+    // 11c. Si TODAVÍA no cambió, intentar requestSubmit como último recurso
+    if (page.url() === formUrl && submitMethod !== 'requestSubmit') {
+      log('11c. URL no cambió — intentando form.requestSubmit()...');
       const requestSubmitResult = await page.evaluate(() => {
-        const form = document.querySelector('form');
+        const textarea = document.querySelector('textarea[name="bid[content]"]');
+        const form = textarea ? textarea.closest('form') : document.querySelector('form');
         if (form && typeof form.requestSubmit === 'function') {
           try { form.requestSubmit(); return 'requestSubmit OK'; } catch (e) { return `requestSubmit error: ${e.message}`; }
         }
-        // NO usar form.submit() — bypasea validación del cliente
         return form ? 'requestSubmit not available' : 'no form found';
       });
-      log(`11b. Resultado fallback: ${requestSubmitResult}`);
+      log(`11c. Resultado: ${requestSubmitResult}`);
 
       if (requestSubmitResult === 'requestSubmit OK') {
-        // Esperar de nuevo navegación/cambio
-        await Promise.race([
-          page.waitForNavigation({ timeout: 15000 }).catch(() => null),
-          page.waitForFunction(
-            () => {
-              const text = document.body.innerText.toLowerCase();
-              return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
-                text.includes('especifique un alcance') || text.includes('campo obligatorio');
-            },
-            { timeout: 15000 }
-          ).catch(() => null),
-        ]);
-        await this.bm.randomDelay(2000, 3000);
+        await this._waitForSubmitResult(page);
       }
     }
 
@@ -571,7 +618,20 @@ class ProposalSubmitter {
           type: b.type, disabled: b.disabled,
         }));
 
-      return { textareas, visibleInputs, selects, buttons };
+      // Formularios — capturar action y method para diagnóstico
+      const forms = [...document.querySelectorAll('form')].map(f => ({
+        action: f.action, method: f.method, id: f.id || '?',
+        inputCount: f.querySelectorAll('input').length,
+      }));
+
+      // Hidden inputs — pueden contener CSRF tokens o datos requeridos
+      const hiddenInputs = [...document.querySelectorAll('input[type="hidden"]')].map(i => ({
+        name: i.name || '?',
+        hasValue: !!(i.value && i.value.length > 0),
+        valueLength: (i.value || '').length,
+      }));
+
+      return { textareas, visibleInputs, selects, buttons, forms, hiddenInputs };
     });
   }
 
@@ -659,8 +719,10 @@ class ProposalSubmitter {
 
       await this.bm.randomDelay(300, 600);
 
-      // Dispatch blur para finalizar la edición en el framework
+      // Dispatch eventos para que el framework MFE reconozca los cambios
+      // 'input' es crítico para React, 'change' para Angular/Vue, 'blur' finaliza
       await textarea.evaluate(el => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
         el.dispatchEvent(new Event('blur', { bubbles: true }));
       });
@@ -826,8 +888,9 @@ class ProposalSubmitter {
           document.execCommand('insertText', false, String(val));
         }, amount);
         await this.bm.randomDelay(200, 400);
-        // Dispatch blur para finalizar la edición
+        // Dispatch eventos para que el framework MFE reconozca los cambios
         await input.evaluate(el => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('blur', { bubbles: true }));
         });
@@ -843,7 +906,8 @@ class ProposalSubmitter {
   // =============================================
 
   async _fillDeliveryTime(page, deliveryDays) {
-    if (!deliveryDays) return 'no proporcionado';
+    // Siempre rellenar delivery time — Workana puede requerirlo aunque el HTML diga required=false
+    if (!deliveryDays) deliveryDays = 7; // Default: 7 días
 
     const input = await page.$('input[name="bid[deliveryTime]"]');
     if (!input) {
@@ -862,6 +926,7 @@ class ProposalSubmitter {
     }, text);
     await this.bm.randomDelay(200, 400);
     await input.evaluate(el => {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       el.dispatchEvent(new Event('blur', { bubbles: true }));
     });
@@ -870,19 +935,11 @@ class ProposalSubmitter {
   }
 
   // =============================================
-  // CLICK BOTÓN "ENVIAR PROPUESTA" (submit del formulario)
+  // ENCONTRAR BOTÓN "ENVIAR PROPUESTA" (submit del formulario)
+  // Solo marca el botón con data-wk-submit="1" sin clickarlo
   // =============================================
 
-  async _clickSubmitButton(page) {
-    // Scroll al fondo
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await this.bm.randomDelay(1000, 2000);
-
-    // Cerrar cookies una vez más por si reaparecieron
-    await this._dismissCookieConsent(page);
-    await this.bm.randomDelay(500, 800);
-
-    // Marcar el botón submit con data attribute para clickarlo con Puppeteer nativo
+  async _findSubmitButton(page) {
     const found = await page.evaluate(() => {
       const allClickable = [...document.querySelectorAll('button, input[type="submit"], a, [role="button"]')];
 
@@ -906,47 +963,48 @@ class ProposalSubmitter {
         });
       }
 
-      // 3. input[type="submit"] visible (Workana usa <input>, no <button>)
+      // 3. input[type="submit"] visible con value que contenga "enviar"
+      if (!btn) {
+        const submitInputs = [...document.querySelectorAll('input[type="submit"]')];
+        btn = submitInputs.find(el => el.offsetHeight > 0 && (el.value || '').toLowerCase().includes('enviar'));
+      }
+
+      // 4. Cualquier input[type="submit"] visible como último recurso
       if (!btn) {
         btn = document.querySelector('input[type="submit"]');
         if (btn && btn.offsetHeight === 0) btn = null;
       }
 
-      // NO usar catch-all "enviar" — puede clickar enlaces/botones incorrectos
-      // (ej: "Enviar mensaje", breadcrumbs, etc.) causando navegación inesperada
+      // Verificar si hay formulario disponible (para requestSubmit)
+      const textarea = document.querySelector('textarea[name="bid[content]"]');
+      const form = textarea ? textarea.closest('form') : document.querySelector('form');
+      const hasForm = !!form;
 
       if (btn) {
         // Marcar para click nativo de Puppeteer
         btn.setAttribute('data-wk-submit', '1');
         btn.scrollIntoView({ block: 'center' });
+
+        // Verificar si hay un overlay que podría interceptar el click
+        const rect = btn.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const topElement = document.elementFromPoint(centerX, centerY);
+        const isObstructed = topElement && topElement !== btn && !btn.contains(topElement);
+
         return {
-          found: true,
+          found: true, hasForm,
           tag: btn.tagName, type: btn.type,
           text: (btn.textContent || '').trim().substring(0, 40),
           value: (btn.value || '').substring(0, 40),
+          isObstructed,
+          obstructedBy: isObstructed ? (topElement.tagName + '.' + topElement.className).substring(0, 60) : null,
         };
       }
-      return { found: false };
+      return { found: false, hasForm };
     });
 
-    console.log(`[Submitter] Submit target: ${JSON.stringify(found)}`);
-    if (!found.found) return false;
-
-    // Click NATIVO de Puppeteer (simula mouse real: mouseover→mousedown→mouseup→click)
-    // Esto es más fiable que el.click() programático para formularios MFE
-    try {
-      await page.click('[data-wk-submit="1"]');
-      console.log('[Submitter] Click nativo OK');
-    } catch (e) {
-      // Fallback: click programático
-      console.log(`[Submitter] Click nativo falló (${e.message}), usando programático...`);
-      await page.evaluate(() => {
-        const btn = document.querySelector('[data-wk-submit="1"]');
-        if (btn) btn.click();
-      });
-    }
-
-    return true;
+    return found;
   }
 
   // =============================================
@@ -1009,6 +1067,12 @@ class ProposalSubmitter {
       return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
     }
 
+    // Capturar bodySnippet INMEDIATAMENTE (ANTES de verificación)
+    // para diagnóstico — después de navegar a proyecto/my_projects se pierde
+    const immediateBodySnippet = await page.evaluate(() => {
+      return (document.body?.innerText || '').substring(0, 2000);
+    }).catch(() => '');
+
     // =============================================
     // CASO AMBIGUO: URL cambió, formulario no visible, sin errores
     // → Verificar volviendo al proyecto para buscar "ya has enviado"
@@ -1020,70 +1084,16 @@ class ProposalSubmitter {
       !pageState.hasSubmitBtn;
 
     if (isAmbiguous && projectUrl) {
-      console.log('[Submitter] Resultado ambiguo — verificando en página del proyecto...');
-      try {
-        await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        await this.bm.randomDelay(3000, 5000);
-        await page.waitForFunction(
-          () => document.body.innerText.length > 500,
-          { timeout: 15000 }
-        ).catch(() => {});
-        await this.bm.randomDelay(2000, 4000);
-
-        const checkResult = await this._checkIfAlreadyApplied(page);
-
-        if (checkResult.sent) {
-          console.log(`[Submitter] ✅ Verificación post-submit confirmó envío: ${checkResult.reason}`);
-          return { success: true, message: `Propuesta enviada (${checkResult.reason})`, url: currentUrl, pageState, verified: true };
-        }
-        console.log(`[Submitter] Re-visita proyecto no confirmó: ${checkResult.reason}`);
-      } catch (e) {
-        console.log(`[Submitter] Error en verificación proyecto: ${e.message}`);
-      }
-
-      // Verificación extra: ir a /my-proposals y buscar si el proyecto aparece
-      console.log('[Submitter] Verificando en /my-proposals...');
-      try {
-        const projectSlug = projectUrl.split('/job/')[1]?.split('?')[0]?.split('/')[0] || '';
-        if (projectSlug) {
-          await page.goto('https://www.workana.com/my_projects?type_company=worker', { waitUntil: 'networkidle2', timeout: 30000 });
-          await this.bm.randomDelay(2000, 4000);
-          await page.waitForFunction(
-            () => document.body.innerText.length > 500,
-            { timeout: 15000 }
-          ).catch(() => {});
-
-          const foundInProposals = await page.evaluate((slug) => {
-            // Buscar enlaces que contengan el slug del proyecto
-            const links = [...document.querySelectorAll('a')];
-            const match = links.find(a => (a.href || '').includes(slug));
-            if (match) {
-              return { found: true, text: (match.textContent || '').trim().substring(0, 100), href: match.href };
-            }
-            // También buscar el título del proyecto en el texto
-            const bodyText = document.body.innerText || '';
-            return { found: bodyText.toLowerCase().includes(slug.replace(/-/g, ' ').substring(0, 30).toLowerCase()), text: 'body text match' };
-          }, projectSlug);
-
-          if (foundInProposals.found) {
-            console.log(`[Submitter] ✅ Proyecto encontrado en /my-proposals: ${foundInProposals.text}`);
-            return { success: true, message: `Propuesta enviada (verificado en mis propuestas)`, url: currentUrl, pageState, verified: true };
-          }
-          console.log('[Submitter] Proyecto NO encontrado en /my-proposals');
-        }
-      } catch (e) {
-        console.log(`[Submitter] Error verificando /my-proposals: ${e.message}`);
+      console.log('[Submitter] Resultado ambiguo — verificando...');
+      const verified = await this._verifyAlreadySent(page, projectUrl, msg => console.log(`[Submitter] ${msg}`));
+      if (verified) {
+        return { success: true, message: 'Propuesta enviada (verificado tras resultado ambiguo)', url: currentUrl, pageState, verified: true };
       }
     }
 
     // =============================================
     // TODO LO DEMÁS → FALLO (con diagnóstico detallado)
     // =============================================
-
-    // Capturar texto de la página para diagnosticar
-    const bodySnippet = await page.evaluate(() => {
-      return (document.body?.innerText || '').substring(0, 2000);
-    }).catch(() => '');
 
     // Mensaje descriptivo según lo que vemos
     let failMessage;
@@ -1099,7 +1109,13 @@ class ProposalSubmitter {
       failMessage = `URL cambió a ${currentUrl} pero SIN confirmación explícita de éxito (verificación también negativa)`;
     }
 
-    return { success: false, message: failMessage, url: currentUrl, pageState, bodySnippet };
+    // bodySnippet inmediato = página justo después de submit (ANTES de verificación)
+    // bodySnippet final = página después de verificación (puede ser /my_projects)
+    const finalBodySnippet = await page.evaluate(() => {
+      return (document.body?.innerText || '').substring(0, 2000);
+    }).catch(() => '');
+
+    return { success: false, message: failMessage, url: currentUrl, pageState, bodySnippet: immediateBodySnippet, bodySnippetAfterVerification: finalBodySnippet };
   }
 
   // =============================================
@@ -1134,8 +1150,32 @@ class ProposalSubmitter {
       const checkedSkills = [...document.querySelectorAll('input[type="checkbox"]:checked')];
       result.skillsSelected = checkedSkills.length;
 
+      // Delivery time
+      const deliveryInput = document.querySelector('input[name="bid[deliveryTime]"]');
+      result.deliveryTime = deliveryInput ? deliveryInput.value : 'NO ENCONTRADO';
+
       return result;
     });
+  }
+
+  // =============================================
+  // ESPERAR RESULTADO DEL SUBMIT (navegación o cambio en página)
+  // =============================================
+
+  async _waitForSubmitResult(page) {
+    await Promise.race([
+      page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+      page.waitForFunction(
+        () => {
+          const text = document.body.innerText.toLowerCase();
+          return text.includes('propuesta enviada') || text.includes('ya has enviado') ||
+            text.includes('felicitaciones') || text.includes('proposal sent') ||
+            text.includes('especifique un alcance') || text.includes('campo obligatorio');
+        },
+        { timeout: 15000 }
+      ).catch(() => null),
+    ]);
+    await this.bm.randomDelay(2000, 3000);
   }
 
   // =============================================

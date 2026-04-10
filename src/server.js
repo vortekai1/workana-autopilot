@@ -293,100 +293,41 @@ app.get('/debug-html', async (req, res) => {
   }
 });
 
-// Debug: análisis profundo del botón "Enviar propuesta" en una página de proyecto
-app.get('/debug-button', async (req, res) => {
+// Vista en vivo del navegador (NO pasa por enqueue — no bloquea operaciones)
+app.get('/live', (req, res) => {
+  const interval = parseInt(req.query.interval) || 2;
+  res.send(`<!DOCTYPE html><html><head><title>Workana Live</title>
+<style>body{margin:0;background:#111;display:flex;flex-direction:column;align-items:center;font-family:sans-serif;color:#eee}
+img{max-width:100%;border:1px solid #333;margin-top:8px}
+#info{padding:8px;font-size:14px;opacity:0.7}</style></head><body>
+<div id="info">Refresh: ${interval}s | <span id="ts"></span> | <span id="url"></span></div>
+<img id="frame" src="/live/frame">
+<script>
+const img=document.getElementById('frame'),ts=document.getElementById('ts'),urlEl=document.getElementById('url');
+setInterval(()=>{
+  const t=Date.now();
+  fetch('/live/frame').then(r=>{urlEl.textContent=r.headers.get('x-page-url')||'';return r.blob()})
+  .then(b=>{img.src=URL.createObjectURL(b);ts.textContent=new Date().toLocaleTimeString()})
+  .catch(()=>{ts.textContent='error'});
+},${interval}*1000);
+</script></body></html>`);
+});
+
+app.get('/live/frame', async (req, res) => {
   try {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ error: 'url requerida' });
-
-    const result = await browserManager.enqueue(async () => {
-      const page = await browserManager.newPage();
-      try {
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-        await browserManager.randomDelay(3000, 5000);
-        await page.waitForFunction(() => document.body.innerText.length > 500, { timeout: 15000 }).catch(() => {});
-        await browserManager.randomDelay(3000, 5000);
-
-        const analysis = await page.evaluate(() => {
-          const result = {};
-          const fullHTML = document.documentElement.outerHTML;
-          result.fullHtmlLength = fullHTML.length;
-          result.bodyTextLength = (document.body?.innerText || '').length;
-
-          // 1. Search all elements with text containing enviar/propuesta
-          const allElements = document.querySelectorAll('*');
-          const matches = [];
-          for (const el of allElements) {
-            const ownText = [...el.childNodes]
-              .filter(n => n.nodeType === 3)
-              .map(n => n.textContent.trim())
-              .join(' ');
-            const fullText = (el.textContent || '').trim().toLowerCase();
-            if (fullText.includes('enviar') && fullText.includes('propuesta')) {
-              matches.push({
-                tag: el.tagName.toLowerCase(),
-                id: el.id || null,
-                className: (el.className || '').toString().substring(0, 100),
-                ownText: ownText.substring(0, 100),
-                fullText: fullText.substring(0, 100),
-                href: el.href || null,
-                role: el.getAttribute('role'),
-                visible: el.offsetHeight > 0 && el.offsetWidth > 0,
-                rect: JSON.parse(JSON.stringify(el.getBoundingClientRect())),
-                parentTag: el.parentElement?.tagName?.toLowerCase(),
-                parentId: el.parentElement?.id || null,
-                parentClass: (el.parentElement?.className || '').toString().substring(0, 80),
-              });
-            }
-          }
-          result.enviarPropuestaMatches = matches;
-
-          // 2. Check for shadow DOMs
-          const shadowHosts = [];
-          for (const el of allElements) {
-            if (el.shadowRoot) {
-              shadowHosts.push({
-                tag: el.tagName.toLowerCase(),
-                id: el.id || null,
-                className: (el.className || '').toString().substring(0, 100),
-                shadowChildCount: el.shadowRoot.childNodes.length,
-                shadowHTML: el.shadowRoot.innerHTML?.substring(0, 500) || '',
-              });
-            }
-          }
-          result.shadowHosts = shadowHosts;
-
-          // 3. Check for iframes with content
-          const iframes = [...document.querySelectorAll('iframe')].map(f => ({
-            src: f.src || '(no src)',
-            width: f.width,
-            height: f.height,
-            visible: f.offsetHeight > 0,
-          }));
-          result.iframes = iframes;
-
-          // 4. All <a> and <button> elements (first 50)
-          const clickables = [...document.querySelectorAll('a, button, [role="button"]')].slice(0, 80).map(el => ({
-            tag: el.tagName.toLowerCase(),
-            text: (el.textContent || '').trim().substring(0, 60),
-            href: el.href ? el.href.substring(0, 100) : null,
-            visible: el.offsetHeight > 0,
-          })).filter(e => e.text.length > 0);
-          result.clickableElements = clickables;
-
-          return result;
-        });
-
-        const screenshot = await page.screenshot({ encoding: 'base64' });
-        return { url: page.url(), analysis, screenshot };
-      } finally {
-        await page.close();
-      }
-    });
-
-    res.json(result);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (!browserManager?.browser?.connected) {
+      return res.status(503).send('Browser no disponible');
+    }
+    const pages = await browserManager.browser.pages();
+    // Última página abierta = la que está usando la operación actual
+    const page = pages[pages.length - 1];
+    if (!page) return res.status(503).send('Sin páginas abiertas');
+    const screenshot = await page.screenshot({ type: 'png' });
+    const url = page.url();
+    res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'x-page-url': url });
+    res.send(screenshot);
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
@@ -455,10 +396,6 @@ async function start() {
 
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
-  // Forzar cierre tras 30s si algo bloquea
-  process.on('SIGINT', () => setTimeout(() => process.exit(1), 30000).unref());
-  process.on('SIGTERM', () => setTimeout(() => process.exit(1), 30000).unref());
 }
 
 start().catch(err => {

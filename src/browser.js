@@ -17,11 +17,6 @@ class BrowserManager {
 
   async init() {
     await this._launchBrowser();
-
-    // Cerrar browser al salir
-    process.on('SIGINT', () => this.close());
-    process.on('SIGTERM', () => this.close());
-
     return this.browser;
   }
 
