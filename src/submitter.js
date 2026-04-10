@@ -1066,9 +1066,11 @@ class ProposalSubmitter {
     }
 
     // FALLO CLARO: Redirección a página de búsqueda de proyectos (/jobs)
-    // Esto ocurre cuando el submit no se procesó correctamente (form incorrecto, sesión expirada, etc.)
+    // Esto ocurre cuando requestSubmit() activó el form incorrecto.
+    // TERMINAL: no reintentar porque requestSubmit() puede haber enviado silenciosamente
+    // (Workana procesa pero redirige a /jobs). Reintentar causaría propuestas duplicadas.
     if (currentUrl.includes('/jobs') && !currentUrl.includes('/jobs/')) {
-      return { success: false, message: `Submit redirigió a búsqueda de proyectos (${currentUrl}) — el formulario no se envió correctamente`, url: currentUrl, pageState };
+      return { success: false, message: `Submit redirigió a búsqueda de proyectos (${currentUrl}) — posible envío duplicado si se reintenta`, url: currentUrl, pageState, _terminal: true };
     }
 
     // Capturar bodySnippet INMEDIATAMENTE (ANTES de verificación)
