@@ -643,7 +643,10 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{$json.PUPPETEER_URL}}/session-check"
+        "url": "={{$json.PUPPETEER_URL}}/session-check",
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "session-check-node",
       "name": "Verificar Sesión",
@@ -653,7 +656,9 @@
         660,
         0
       ],
-      "retryOnFail": false
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -689,7 +694,10 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$('Control Cuota y Horario').item.json.PUPPETEER_URL}}/login"
+        "url": "={{$('Control Cuota y Horario').item.json.PUPPETEER_URL}}/login",
+        "options": {
+          "timeout": 60000
+        }
       },
       "id": "auto-relogin",
       "name": "Intentar Re-Login",
@@ -699,7 +707,9 @@
         960,
         200
       ],
-      "retryOnFail": false
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
