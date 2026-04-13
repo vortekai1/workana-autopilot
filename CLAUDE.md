@@ -34,10 +34,10 @@ workana-autopilot/
 ├── docker-compose.yml
 ├── .env.example
 ├── sql-pro-upgrade.sql                # SQL PRO: columnas + 3 vistas analíticas
-├── n8n-workflow.json                  # Workflow principal v5-PRO (~30 nodos)
-├── n8n-workflow-daily-summary.json    # Resumen diario WhatsApp (22:00)
-├── n8n-workflow-retry.json            # Cola de reintentos (cada 15 min)
-├── n8n-workflow-feedback.json         # Feedback loop propuestas (9:00)
+├── n8n-workflow.json                  # Workflow principal v5-PRO (~31 nodos)
+├── n8n-workflow-daily-summary.json    # Resumen diario WhatsApp (22:00, 10 nodos)
+├── n8n-workflow-retry.json            # Cola de reintentos (cada 15 min, 13 nodos)
+├── n8n-workflow-feedback.json         # Feedback loop propuestas (9:00, 5 nodos)
 ├── src/
 │   ├── server.js                      # API Express (11 endpoints, puerto 3500)
 │   ├── browser.js                     # BrowserManager: Puppeteer + stealth + UA rotation + fatiga
@@ -148,7 +148,7 @@ RPCs: `get_new_workana_projects()`, `get_workana_daily_stats()`
 - `SUPABASE_KEY` — Service Role Key (embebida en el código)
 - `EVOLUTION_URL` — `https://evo.vortekai.es`
 - `EVOLUTION_INSTANCE` — `Ventas vortek`
-- `WHATSAPP_NUMBER` — `34628706539`
+- `WHATSAPP_NUMBER` — `34653693605`
 - `SEARCH_CATEGORIES` — `['it-programming', 'design-multimedia', 'writing-translation', 'admin-support']`
 - `SEARCH_PAGES` — `2`
 - `MIN_RELEVANCE_AUTO` — `80`
@@ -171,14 +171,15 @@ El nodo **"Control Cuota y Horario"** controla la ejecución con 4 capas:
 ### Flujo del workflow principal:
 
 ```
-Cada 30 min → CONFIG → Control Cuota y Horario
+Cada 30 min → CONFIG → Check Horario → GET Cuota Semanal → Control Cuota y Horario
 → Verificar Sesión → ¿OK? → (NO: Re-Login → ¿OK? → NO: Alerta WhatsApp + STOP)
-→ Scrape → Parsear → Filtrar Nuevos (batch Supabase)
-→ Obtener Detalles → Combinar Datos (+ parseBudget) → Calcular Pre-Score (base 30)
+→ Scrape Workana → Parsear → Preparar Consulta DB → GET URLs Existentes (limit=10000)
+→ Filtrar Nuevos (si 0 nuevos → return [] → flujo se detiene limpiamente)
+→ GET Detalles Proyecto → Obtener Detalles (+ parseBudget) → Calcular Pre-Score
 → Preparar Prompt IA (+ patrones ganadores + perfil cliente + A/B testing)
 → IA Genera Propuesta (gpt-4o) → Estructurar Datos (+ variant + tone)
 → Guardar Proyecto (upsert) → ¿Aplica?
-  ├─ SÍ → Guardar Propuesta → Auto Mode?
+  ├─ SÍ → Preparar Propuesta → Guardar Propuesta → Auto Mode?
   │        ├─ AUTO + relevancia≥80 → Enviar → OK: WhatsApp ✅ / FALLO: retry_queue + WhatsApp ❌
   │        └─ MANUAL → WhatsApp con propuesta
   └─ NO → guardado como 'skipped'
@@ -229,9 +230,12 @@ Rechaza: diseño gráfico puro, traducción, contabilidad, presencia física, >5
 
 ### Workflows Auxiliares
 
-- **Resumen Diario** (`n8n-workflow-daily-summary.json`): 22:00 L-S, WhatsApp con resumen del día
-- **Cola Reintentos** (`n8n-workflow-retry.json`): cada 15 min, reintenta envíos fallidos (máx 3 intentos, backoff exponencial)
-- **Feedback Loop** (`n8n-workflow-feedback.json`): 9:00 L-S, scrape `/my-proposals?maxPages=3`, clasifica outcomes, actualiza DB
+- **Resumen Diario** (`n8n-workflow-daily-summary.json`): 22:00 L-S, 10 nodos
+  - Flujo: Trigger → CONFIG → Calcular Fechas → 5x GET HTTP en paralelo (proyectos, propuestas, errores, cuota, retry) → Construir Resumen (Code puro) → WhatsApp
+- **Cola Reintentos** (`n8n-workflow-retry.json`): cada 15 min, 13 nodos
+  - Flujo: Trigger → CONFIG → GET Pendientes → Preparar Items → PATCH Processing → Reintentar Envío → Evaluar Resultado → IF Éxito → (SÍ: PATCH Completed + PATCH Proyecto Sent / NO: IF Max → PATCH Failed o PATCH Backoff)
+- **Feedback Loop** (`n8n-workflow-feedback.json`): 9:00 L-S, 5 nodos
+  - Flujo: Trigger → CONFIG → Scrape Mis Propuestas → Preparar Updates (Code puro) → PATCH Proyecto (HTTP per-item)
 
 ## Submitter — Compatibilidad MFE (submitter.js)
 
@@ -305,6 +309,17 @@ USER_DATA_DIR=./chrome-data
 11. Fatiga nocturna — Delays x1.5 después de las 20:00, x1.2 después de las 17:00
 12. Espera render MFE — `waitForFunction` antes de interactuar
 
+## REGLA CRÍTICA: n8n Code Nodes — Sin HTTP
+
+Los Code nodes de n8n ejecutan en un **sandbox** que bloquea:
+- `fetch()` — NO disponible
+- `require('https')` / `require('http')` — NO disponible
+- Cualquier módulo Node.js que haga HTTP
+
+**TODAS las llamadas HTTP deben usar nodos HTTP Request nativos** (typeVersion 4.2). Los Code nodes SOLO pueden hacer transformación de datos (JavaScript puro).
+
+Si necesitas hacer múltiples llamadas HTTP condicionales, usa IF nodes + HTTP Request nodes en vez de lógica dentro de Code nodes.
+
 ## Notas de Desarrollo
 
 - Workana usa **MFE** — todo el contenido se renderiza con JS post-load. Usar `waitForFunction` antes de interactuar.
@@ -319,3 +334,6 @@ USER_DATA_DIR=./chrome-data
 - Status permitidos: `new`, `proposal_generated`, `sent`, `skipped`, `applied`, `won`, `lost`.
 - **CORS habilitado** en server.js para que el dashboard acceda al health check.
 - Si el cron de n8n deja de ejecutar, **desactivar y reactivar** el workflow.
+- **Supabase REST default limit = 1000 filas** — SIEMPRE añadir `&limit=10000` en queries que necesiten todos los registros (ej: GET URLs Existentes).
+- **n8n item pairing**: Si un Code node usa `runOnceForAllItems`, los nodos downstream NO pueden usar `$('NombreNodo').item.json` — usar `$('NombreNodo').all()[$itemIndex]` en su lugar.
+- **Filtrar Nuevos**: Cuando hay 0 proyectos nuevos, retorna `[]` (no un debug item). El flujo se detiene limpiamente sin error.

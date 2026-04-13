@@ -53,16 +53,53 @@
     },
     {
       "parameters": {
-        "jsCode": "const config = $('CONFIG').item.json;\nconst data = $input.first().json;\n\nif (!data.success || !Array.isArray(data.proposals)) {\n  console.log('No se pudieron obtener propuestas:', data.error || 'unknown');\n  return [];\n}\n\nconst headers = {\n  'apikey': config.SUPABASE_KEY,\n  'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n  'Content-Type': 'application/json',\n};\n\nlet updated = 0;\nfor (const p of data.proposals) {\n  if (!p.project_url) continue;\n\n  const body = {\n    client_responded: p.client_responded || false,\n  };\n\n  // Solo actualizar outcome si no es 'in_progress' (no sobreescribir won/lost)\n  if (p.outcome && p.outcome !== 'in_progress') {\n    body.outcome = p.outcome;\n    if (p.outcome === 'won') body.status = 'won';\n    else if (p.outcome === 'lost') body.status = 'lost';\n  }\n\n  try {\n    await fetch(\n      `${config.SUPABASE_URL}/rest/v1/workana_projects?workana_url=eq.${encodeURIComponent(p.project_url)}`,\n      { method: 'PATCH', headers, body: JSON.stringify(body) }\n    );\n    updated++;\n  } catch (e) {\n    console.error('Error actualizando:', p.project_url, e.message);\n  }\n}\n\nconsole.log(`Actualizados ${updated}/${data.proposals.length} proyectos`);\nreturn [{ json: { updated, total: data.proposals.length } }];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const config = $('CONFIG').first().json;\nconst data = $input.first().json;\n\nif (!data.success || !Array.isArray(data.proposals)) {\n  console.log('No se pudieron obtener propuestas:', data.error || 'unknown');\n  return [];\n}\n\nconst updates = [];\nfor (const p of data.proposals) {\n  if (!p.project_url) continue;\n\n  const body = {\n    client_responded: p.client_responded || false,\n  };\n\n  if (p.outcome && p.outcome !== 'in_progress') {\n    body.outcome = p.outcome;\n    if (p.outcome === 'won') body.status = 'won';\n    else if (p.outcome === 'lost') body.status = 'lost';\n  }\n\n  updates.push({\n    json: {\n      project_url: p.project_url,\n      patch_body: body,\n      SUPABASE_URL: config.SUPABASE_URL,\n      SUPABASE_KEY: config.SUPABASE_KEY,\n    }\n  });\n}\n\nconsole.log('Preparados ' + updates.length + ' updates de feedback');\nreturn updates;"
       },
-      "id": "feedback-update",
-      "name": "Actualizar DB",
+      "id": "feedback-preparar",
+      "name": "Preparar Updates",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         660,
         0
       ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_projects?workana_url=eq.{{ encodeURIComponent($json.project_url) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.patch_body) }}",
+        "options": {}
+      },
+      "id": "feedback-patch",
+      "name": "PATCH Proyecto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -92,7 +129,18 @@
       "main": [
         [
           {
-            "node": "Actualizar DB",
+            "node": "Preparar Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Updates": {
+      "main": [
+        [
+          {
+            "node": "PATCH Proyecto",
             "type": "main",
             "index": 0
           }

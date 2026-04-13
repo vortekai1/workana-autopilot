@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "return [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34628706539',\n  }\n}];"
+        "jsCode": "return [{\n  json: {\n    PUPPETEER_URL: 'https://workana-auto-pilot.ioefpm.easypanel.host',\n    SUPABASE_URL: 'https://zcmqcosuvjndgcwylzna.supabase.co',\n    SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpjbXFjb3N1dmpuZGdjd3lsem5hIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzMxNTcwOCwiZXhwIjoyMDg4ODkxNzA4fQ.lgJ_VxIBAZMmTtjo3L4vUwsIGRD_glaYYsdhHkuUTHM',\n    EVOLUTION_URL: 'https://evo.vortekai.es',\n    EVOLUTION_INSTANCE: 'Ventas vortek',\n    WHATSAPP_NUMBER: '34653693605',\n  }\n}];"
       },
       "id": "retry-config",
       "name": "CONFIG",
@@ -36,21 +36,88 @@
     },
     {
       "parameters": {
-        "jsCode": "const config = $input.first().json;\nconst now = new Date().toISOString();\nconst headers = {\n  'apikey': config.SUPABASE_KEY,\n  'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n  'Content-Type': 'application/json',\n};\n\n// Obtener items pendientes cuyo next_retry_at ya pasó\nconst resp = await fetch(\n  `${config.SUPABASE_URL}/rest/v1/workana_retry_queue?status=eq.pending&next_retry_at=lte.${now}&order=next_retry_at.asc&limit=3`,\n  { headers: { 'apikey': config.SUPABASE_KEY, 'Authorization': `Bearer ${config.SUPABASE_KEY}` } }\n);\nconst items = await resp.json();\n\nif (!Array.isArray(items) || items.length === 0) {\n  console.log('No hay items en cola de reintentos');\n  return [];\n}\n\nconsole.log(`${items.length} items en cola de reintentos`);\n\n// Marcar como processing\nfor (const item of items) {\n  await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_retry_queue?id=eq.${item.id}`,\n    {\n      method: 'PATCH',\n      headers,\n      body: JSON.stringify({ status: 'processing', updated_at: now }),\n    }\n  );\n}\n\nreturn items.map(item => ({ json: { ...item, config } }));"
+        "method": "GET",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_retry_queue?status=eq.pending&next_retry_at=lte.{{ new Date().toISOString() }}&order=next_retry_at.asc&limit=3",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+            }
+          ]
+        },
+        "options": {}
       },
       "id": "retry-get-pending",
-      "name": "Obtener Pendientes",
+      "name": "GET Pendientes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const config = $('CONFIG').first().json;\nconst items = $input.all();\n\n// Filtrar items válidos de retry_queue (tienen id y project_url)\nconst validItems = items.filter(i => i.json && i.json.id && i.json.project_url);\n\nif (validItems.length === 0) {\n  console.log('No hay items pendientes válidos en retry queue');\n  return [];\n}\n\nconsole.log(validItems.length + ' items pendientes para reintentar');\n\nreturn validItems.map(item => ({\n  json: {\n    ...item.json,\n    config: config,\n  }\n}));"
+      },
+      "id": "retry-preparar",
+      "name": "Preparar Items",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
+        660,
         0
       ]
     },
     {
       "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.config.SUPABASE_URL }}/rest/v1/workana_retry_queue?id=eq.{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.config.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.config.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"processing\",\n  \"updated_at\": \"{{ new Date().toISOString() }}\"\n}",
+        "options": {}
+      },
+      "id": "retry-mark-processing",
+      "name": "PATCH Marcar Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "={{$json.config.PUPPETEER_URL}}/submit-proposal",
+        "url": "={{ $('Preparar Items').item.json.config.PUPPETEER_URL }}/submit-proposal",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -62,29 +129,238 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ url: $json.project_url, text: $json.proposal_text, budget: $json.budget_suggested, delivery_days: $json.delivery_days }) }}"
+        "jsonBody": "={{ JSON.stringify({ url: $('Preparar Items').item.json.project_url, text: $('Preparar Items').item.json.proposal_text, budget: $('Preparar Items').item.json.budget_suggested, delivery_days: $('Preparar Items').item.json.delivery_days }) }}",
+        "options": {
+          "timeout": 120000
+        }
       },
       "id": "retry-submit",
       "name": "Reintentar Envío",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
+        1100,
         0
       ],
-      "retryOnFail": false
+      "retryOnFail": false,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "jsCode": "const result = $input.first().json;\nconst retryItem = $('Obtener Pendientes').item.json;\nconst config = retryItem.config;\nconst now = new Date().toISOString();\nconst headers = {\n  'apikey': config.SUPABASE_KEY,\n  'Authorization': `Bearer ${config.SUPABASE_KEY}`,\n  'Content-Type': 'application/json',\n};\n\nif (result.success) {\n  // Éxito: marcar como completed\n  await fetch(\n    `${config.SUPABASE_URL}/rest/v1/workana_retry_queue?id=eq.${retryItem.id}`,\n    { method: 'PATCH', headers, body: JSON.stringify({ status: 'completed', updated_at: now }) }\n  );\n  // Actualizar proyecto a 'sent'\n  if (retryItem.project_id) {\n    await fetch(\n      `${config.SUPABASE_URL}/rest/v1/workana_projects?id=eq.${retryItem.project_id}`,\n      { method: 'PATCH', headers, body: JSON.stringify({ status: 'sent', auto_sent: true }) }\n    );\n  }\n  console.log('✅ Reintento exitoso: ' + retryItem.project_url);\n} else {\n  const newAttempt = (retryItem.attempt_count || 0) + 1;\n\n  if (newAttempt >= (retryItem.max_attempts || 3)) {\n    // Máximo de intentos\n    await fetch(\n      `${config.SUPABASE_URL}/rest/v1/workana_retry_queue?id=eq.${retryItem.id}`,\n      { method: 'PATCH', headers, body: JSON.stringify({ status: 'failed', attempt_count: newAttempt, error_message: result.message || 'Max retries', updated_at: now }) }\n    );\n    console.log('❌ Máximo reintentos alcanzado: ' + retryItem.project_url);\n  } else {\n    // Backoff exponencial: 15min → 60min → 240min\n    const backoffMs = Math.pow(4, newAttempt - 1) * 15 * 60 * 1000;\n    const nextRetry = new Date(Date.now() + backoffMs).toISOString();\n\n    await fetch(\n      `${config.SUPABASE_URL}/rest/v1/workana_retry_queue?id=eq.${retryItem.id}`,\n      { method: 'PATCH', headers, body: JSON.stringify({ status: 'pending', attempt_count: newAttempt, next_retry_at: nextRetry, error_message: result.message || 'Retry failed', updated_at: now }) }\n    );\n    console.log(`🔄 Reintento ${newAttempt}/3 fallido, próximo en ${Math.round(backoffMs/60000)} min`);\n  }\n}\n\nreturn [{ json: { processed: true, success: result.success } }];"
+        "jsCode": "const result = $input.first().json;\nconst retryItem = $('Preparar Items').item.json;\nconst config = retryItem.config;\nconst success = result.success === true;\nconst now = new Date().toISOString();\nconst newAttempt = (retryItem.attempt_count || 0) + 1;\nconst maxReached = newAttempt >= (retryItem.max_attempts || 3);\n\n// Backoff exponencial: 15min → 60min → 240min\nconst backoffMs = Math.pow(4, newAttempt - 1) * 15 * 60 * 1000;\nconst nextRetry = new Date(Date.now() + backoffMs).toISOString();\n\nconsole.log('Resultado retry id=' + retryItem.id + ': success=' + success + ', attempt=' + newAttempt + '/' + (retryItem.max_attempts || 3));\n\nreturn [{\n  json: {\n    success,\n    retryId: retryItem.id,\n    projectId: retryItem.project_id || null,\n    projectUrl: retryItem.project_url,\n    newAttempt,\n    maxReached,\n    nextRetry,\n    errorMessage: result.message || 'Unknown',\n    now,\n    SUPABASE_URL: config.SUPABASE_URL,\n    SUPABASE_KEY: config.SUPABASE_KEY,\n  }\n}];"
       },
-      "id": "retry-process",
-      "name": "Procesar Resultado",
+      "id": "retry-evaluar",
+      "name": "Evaluar Resultado",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
+        1320,
         0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-exito",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "retry-if-exito",
+      "name": "IF Éxito",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_retry_queue?id=eq.{{ $json.retryId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"completed\",\n  \"updated_at\": \"{{ $json.now }}\"\n}",
+        "options": {}
+      },
+      "id": "retry-patch-completed",
+      "name": "PATCH Retry Completed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Evaluar Resultado').item.json.SUPABASE_URL }}/rest/v1/workana_projects?id=eq.{{ $('Evaluar Resultado').item.json.projectId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $('Evaluar Resultado').item.json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Evaluar Resultado').item.json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"sent\",\n  \"auto_sent\": true\n}",
+        "options": {}
+      },
+      "id": "retry-patch-proyecto-sent",
+      "name": "PATCH Proyecto Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        -100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-max",
+              "leftValue": "={{ $json.maxReached }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "retry-if-max",
+      "name": "IF Max Intentos",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_retry_queue?id=eq.{{ $json.retryId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"failed\",\n  \"attempt_count\": {{ $json.newAttempt }},\n  \"error_message\": {{ JSON.stringify($json.errorMessage) }},\n  \"updated_at\": \"{{ $json.now }}\"\n}",
+        "options": {}
+      },
+      "id": "retry-patch-failed",
+      "name": "PATCH Retry Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        50
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_retry_queue?id=eq.{{ $json.retryId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"pending\",\n  \"attempt_count\": {{ $json.newAttempt }},\n  \"next_retry_at\": \"{{ $json.nextRetry }}\",\n  \"error_message\": {{ JSON.stringify($json.errorMessage) }},\n  \"updated_at\": \"{{ $json.now }}\"\n}",
+        "options": {}
+      },
+      "id": "retry-patch-backoff",
+      "name": "PATCH Retry Backoff",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        200
       ]
     }
   ],
@@ -104,14 +380,36 @@
       "main": [
         [
           {
-            "node": "Obtener Pendientes",
+            "node": "GET Pendientes",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Obtener Pendientes": {
+    "GET Pendientes": {
+      "main": [
+        [
+          {
+            "node": "Preparar Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Items": {
+      "main": [
+        [
+          {
+            "node": "PATCH Marcar Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PATCH Marcar Processing": {
       "main": [
         [
           {
@@ -126,7 +424,65 @@
       "main": [
         [
           {
-            "node": "Procesar Resultado",
+            "node": "Evaluar Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar Resultado": {
+      "main": [
+        [
+          {
+            "node": "IF Éxito",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Éxito": {
+      "main": [
+        [
+          {
+            "node": "PATCH Retry Completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Max Intentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PATCH Retry Completed": {
+      "main": [
+        [
+          {
+            "node": "PATCH Proyecto Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Max Intentos": {
+      "main": [
+        [
+          {
+            "node": "PATCH Retry Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PATCH Retry Backoff",
             "type": "main",
             "index": 0
           }
