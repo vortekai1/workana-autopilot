@@ -11,7 +11,7 @@ class BrowserManager {
     this.headless = headless;
     this.browser = null;
     this.loggedIn = false;
-    this._launching = false; // Prevent concurrent launches
+    this._launchPromise = null; // Shared promise for concurrent launch callers
     this._operationQueue = Promise.resolve(); // Mutex for sequential operations
   }
 
@@ -21,44 +21,51 @@ class BrowserManager {
   }
 
   async _launchBrowser() {
-    if (this._launching) return;
-    this._launching = true;
-
-    try {
-      if (this.browser) {
-        try { await this.browser.close(); } catch (_) {}
-        this.browser = null;
-      }
-
-      this.browser = await puppeteer.launch({
-        headless: this.headless ? 'new' : false,
-        userDataDir: this.userDataDir,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-dev-shm-usage',
-          '--window-size=1920,1080',
-          '--lang=es-ES',
-        ],
-        defaultViewport: { width: 1920, height: 1080 },
-      });
-
-      // Auto-recovery: si el browser se desconecta, re-lanzar
-      this.browser.on('disconnected', () => {
-        console.error('[Browser] Chromium desconectado — re-lanzando...');
-        this.browser = null;
-        this.loggedIn = false;
-        this._launching = false;
-        this._launchBrowser().catch(err => {
-          console.error('[Browser] Error re-lanzando:', err.message);
-        });
-      });
-
-      console.log('[Browser] Chromium lanzado correctamente');
-    } finally {
-      this._launching = false;
+    // Si ya hay un lanzamiento en curso, esperar a que termine
+    if (this._launchPromise) {
+      return this._launchPromise;
     }
+
+    // Crear promise compartida para que todos los callers puedan await
+    this._launchPromise = (async () => {
+      try {
+        if (this.browser) {
+          try { await this.browser.close(); } catch (_) {}
+          this.browser = null;
+        }
+
+        this.browser = await puppeteer.launch({
+          headless: this.headless ? 'new' : false,
+          userDataDir: this.userDataDir,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-dev-shm-usage',
+            '--window-size=1920,1080',
+            '--lang=es-ES',
+          ],
+          defaultViewport: { width: 1920, height: 1080 },
+        });
+
+        // Auto-recovery: si el browser se desconecta, re-lanzar
+        this.browser.on('disconnected', () => {
+          console.error('[Browser] Chromium desconectado — re-lanzando...');
+          this.browser = null;
+          this.loggedIn = false;
+          this._launchPromise = null;
+          this._launchBrowser().catch(err => {
+            console.error('[Browser] Error re-lanzando:', err.message);
+          });
+        });
+
+        console.log('[Browser] Chromium lanzado correctamente');
+      } finally {
+        this._launchPromise = null;
+      }
+    })();
+
+    return this._launchPromise;
   }
 
   // Ensure browser is alive, re-launch if needed
@@ -84,7 +91,15 @@ class BrowserManager {
   // Esto previene que dos requests simultáneas sobrecargen Chromium
   // o disparen anti-detección por actividad paralela
   enqueue(fn) {
-    const op = this._operationQueue.then(() => fn()).catch(err => {
+    const op = this._operationQueue.then(() => {
+      // Timeout de 120s para evitar que operaciones colgadas bloqueen la cola
+      return Promise.race([
+        fn(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Operation timeout (120s)')), 120000)
+        )
+      ]);
+    }).catch(err => {
       console.error('[Browser] Error en operación encolada:', err.message);
       throw err;
     });
