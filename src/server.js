@@ -257,6 +257,27 @@ app.get('/session-check', async (req, res) => {
   }
 });
 
+// Limpiar cookies del browser (para resolver redirect loops)
+app.post('/clear-cookies', async (req, res) => {
+  try {
+    const result = await browserManager.enqueue(async () => {
+      const page = await browserManager.newPage();
+      try {
+        const client = await page.createCDPSession();
+        await client.send('Network.clearBrowserCookies');
+        await client.send('Network.clearBrowserCache');
+        await client.detach();
+        return { cleared: true };
+      } finally {
+        await page.close();
+      }
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Tomar screenshot (para debug)
 app.get('/screenshot', async (req, res) => {
   try {
