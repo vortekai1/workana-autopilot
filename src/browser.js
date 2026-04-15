@@ -178,10 +178,28 @@ class BrowserManager {
     const page = await this.newPage();
 
     try {
+      // Intentar navegar al login
+      let navError = null;
       await page.goto('https://www.workana.com/login', {
         waitUntil: 'networkidle2',
         timeout: 30000,
-      });
+      }).catch(err => { navError = err; });
+
+      // Si hay redirect loop, limpiar cookies y reintentar
+      if (navError && navError.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+        console.log('[Browser] Redirect loop detectado — limpiando cookies...');
+        const client = await page.createCDPSession();
+        await client.send('Network.clearBrowserCookies');
+        await client.send('Network.clearBrowserCache');
+        await client.detach();
+        await this.randomDelay(1000, 2000);
+        await page.goto('https://www.workana.com/login', {
+          waitUntil: 'networkidle2',
+          timeout: 30000,
+        });
+      } else if (navError) {
+        throw navError;
+      }
 
       await this.randomDelay(2000, 3000);
 
@@ -302,10 +320,24 @@ class BrowserManager {
     const page = await this.newPage();
 
     try {
+      let navError = null;
       await page.goto('https://www.workana.com/dashboard', {
         waitUntil: 'networkidle2',
         timeout: 20000,
-      });
+      }).catch(err => { navError = err; });
+
+      // Redirect loop = cookies corruptas = sesión muerta
+      if (navError && navError.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+        console.log('[Browser] Redirect loop en checkSession — limpiando cookies...');
+        const client = await page.createCDPSession();
+        await client.send('Network.clearBrowserCookies');
+        await client.send('Network.clearBrowserCache');
+        await client.detach();
+        this.loggedIn = false;
+        return { success: true, loggedIn: false, url: 'cookies cleared (redirect loop)' };
+      } else if (navError) {
+        throw navError;
+      }
 
       const url = page.url();
       this.loggedIn = url.includes('/dashboard') || url.includes('/home');
