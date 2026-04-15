@@ -90,13 +90,12 @@ class BrowserManager {
   // Mutex: serializa operaciones de Puppeteer para evitar concurrencia
   // Esto previene que dos requests simultáneas sobrecargen Chromium
   // o disparen anti-detección por actividad paralela
-  enqueue(fn) {
+  enqueue(fn, timeoutMs = 120000) {
     const op = this._operationQueue.then(() => {
-      // Timeout de 120s para evitar que operaciones colgadas bloqueen la cola
       return Promise.race([
         fn(),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Operation timeout (120s)')), 120000)
+          setTimeout(() => reject(new Error(`Operation timeout (${Math.round(timeoutMs/1000)}s)`)), timeoutMs)
         )
       ]);
     }).catch(err => {

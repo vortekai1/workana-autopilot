@@ -86,6 +86,7 @@ app.post('/scrape-all', async (req, res) => {
       language = 'es',
     } = req.body;
 
+    // Timeout largo: 4 categorías × 2 páginas × ~25s/página = ~200s típico
     const result = await browserManager.enqueue(async () => {
       const allProjects = [];
 
@@ -102,7 +103,7 @@ app.post('/scrape-all', async (req, res) => {
 
       // Deduplicar por URL
       return [...new Map(allProjects.map(p => [p.url, p])).values()];
-    });
+    }, 300000);
 
     res.json({ success: true, projects: result, total: result.length });
   } catch (error) {
@@ -134,9 +135,10 @@ app.post('/submit-proposal', async (req, res) => {
         error: 'URL y texto de propuesta requeridos',
       });
     }
+    // Timeout largo: hasta 3 reintentos × ~60s/intento + verificaciones
     const result = await browserManager.enqueue(() =>
       submitter.submit(url, text, budget, delivery_days, debug)
-    );
+    , 300000);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
