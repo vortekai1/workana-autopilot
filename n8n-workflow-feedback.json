@@ -37,7 +37,10 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{$json.PUPPETEER_URL}}/my-proposals?page=1"
+        "url": "={{$json.PUPPETEER_URL}}/my-proposals?page=1",
+        "options": {
+          "timeout": 180000
+        }
       },
       "id": "feedback-scrape",
       "name": "Scrape Mis Propuestas",

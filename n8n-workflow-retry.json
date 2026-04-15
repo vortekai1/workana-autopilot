@@ -131,7 +131,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ url: $('Preparar Items').item.json.project_url, text: $('Preparar Items').item.json.proposal_text, budget: $('Preparar Items').item.json.budget_suggested, delivery_days: $('Preparar Items').item.json.delivery_days }) }}",
         "options": {
-          "timeout": 120000
+          "timeout": 600000
         }
       },
       "id": "retry-submit",

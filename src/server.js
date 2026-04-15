@@ -337,9 +337,10 @@ app.get('/live/frame', async (req, res) => {
 app.get('/my-proposals', async (req, res) => {
   try {
     const { page = 1, maxPages = 3 } = req.query;
+    // Timeout largo: hasta 3 páginas × ~30s/página + delays
     const result = await browserManager.enqueue(() =>
       scraper.scrapeMyProposals(parseInt(page), parseInt(maxPages))
-    );
+    , 180000);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
