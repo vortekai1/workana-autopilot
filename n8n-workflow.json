@@ -444,9 +444,7 @@
         4130,
         -150
       ],
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 5000,
+      "retryOnFail": false,
       "onError": "continueRegularOutput"
     },
     {
