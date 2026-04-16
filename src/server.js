@@ -127,21 +127,32 @@ app.get('/project-details', async (req, res) => {
 
 // Enviar propuesta
 app.post('/submit-proposal', async (req, res) => {
+  // Safety timeout: GARANTIZA respuesta a n8n aunque enqueue falle silenciosamente
+  const SAFETY_TIMEOUT_MS = 240000; // 4 min — antes del enqueue timeout de 5 min
+  const safetyTimer = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error('[Server] Safety timeout en /submit-proposal — forzando respuesta');
+      res.status(504).json({ success: false, error: 'Server safety timeout (240s)' });
+    }
+  }, SAFETY_TIMEOUT_MS);
+
   try {
     const { url, text, budget, delivery_days, debug } = req.body;
     if (!url || !text) {
+      clearTimeout(safetyTimer);
       return res.status(400).json({
         success: false,
         error: 'URL y texto de propuesta requeridos',
       });
     }
-    // Timeout largo: hasta 3 reintentos × ~60s/intento + verificaciones
     const result = await browserManager.enqueue(() =>
       submitter.submit(url, text, budget, delivery_days, debug)
     , 300000);
-    res.json(result);
+    clearTimeout(safetyTimer);
+    if (!res.headersSent) res.json(result);
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    clearTimeout(safetyTimer);
+    if (!res.headersSent) res.status(500).json({ success: false, error: error.message });
   }
 });
 

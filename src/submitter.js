@@ -8,7 +8,9 @@ class ProposalSubmitter {
     const startTime = Date.now();
     const log = (msg) => console.log(`[Submitter] ${msg}`);
     const screenshots = {};
-    const MAX_SUBMIT_ATTEMPTS = 3;
+    const MAX_SUBMIT_ATTEMPTS = 2;
+    const MAX_TOTAL_TIME_MS = 210000; // 3.5 min — abortar antes del enqueue timeout (5 min)
+    const isTimedOut = () => (Date.now() - startTime) > MAX_TOTAL_TIME_MS;
 
     try {
       log(`=== INICIO SUBMIT ===`);
@@ -20,14 +22,21 @@ class ProposalSubmitter {
       // Cada intento: navegar → rellenar → enviar → verificar
       // Si el resultado es ambiguo, re-visita para confirmar antes de reintentar
       // Excepciones (timeouts, page crashes) NO rompen el bucle
+      // Abort global si se supera MAX_TOTAL_TIME_MS
       // =============================================
 
       let lastResult = null;
 
       for (let attempt = 1; attempt <= MAX_SUBMIT_ATTEMPTS; attempt++) {
+        // Abort global si llevamos demasiado tiempo
+        if (isTimedOut()) {
+          log(`⏱️ Tiempo total excedido (${Math.round((Date.now()-startTime)/1000)}s) — abortando`);
+          break;
+        }
+
         if (attempt > 1) {
           log(`\n🔄 === REINTENTO ${attempt}/${MAX_SUBMIT_ATTEMPTS} ===`);
-          await this.bm.randomDelay(5000, 10000); // Delay entre reintentos
+          await this.bm.randomDelay(3000, 5000); // Delay entre reintentos
         }
 
         try {
@@ -78,7 +87,7 @@ class ProposalSubmitter {
         }
 
         // Antes de reintentar: verificar si realmente se envió (re-visitar proyecto)
-        if (attempt < MAX_SUBMIT_ATTEMPTS) {
+        if (attempt < MAX_SUBMIT_ATTEMPTS && !isTimedOut()) {
           log('Verificando si se envió antes de reintentar...');
           try {
             const alreadySent = await this._verifyAlreadySent(page, projectUrl, log);
@@ -127,13 +136,13 @@ class ProposalSubmitter {
   async _singleSubmitAttempt(page, projectUrl, proposalText, budget, deliveryDays, debug, screenshots, log, attempt) {
 
     // 1. Navegar al proyecto
-    await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-    await this.bm.randomDelay(2000, 3000);
+    await page.goto(projectUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await this.bm.randomDelay(1500, 2500);
     await page.waitForFunction(
       () => document.body.innerText.length > 500,
-      { timeout: 15000 }
+      { timeout: 10000 }
     ).catch(() => log('Timeout esperando render MFE'));
-    await this.bm.randomDelay(2000, 3000);
+    await this.bm.randomDelay(1500, 2500);
 
     // 1b. Cerrar banner de cookies si existe (bloquea clicks)
     await this._dismissCookieConsent(page);
@@ -163,18 +172,18 @@ class ProposalSubmitter {
     log('2. Botón "Enviar propuesta" clickeado');
 
     // 3. Esperar que el formulario cargue — puede aparecer "Área protegida"
-    await this.bm.randomDelay(3000, 5000);
+    await this.bm.randomDelay(2000, 3000);
 
     // Verificar si Workana pide confirmar contraseña ("Área protegida")
     const protectedHandled = await this._handleProtectedArea(page, log);
     if (protectedHandled) {
       log('3a. "Área protegida" detectada y resuelta, esperando formulario...');
-      await this.bm.randomDelay(3000, 5000);
+      await this.bm.randomDelay(2000, 3000);
     }
 
     const formLoaded = await page.waitForFunction(
       () => document.querySelectorAll('textarea').length > 0,
-      { timeout: 20000 }
+      { timeout: 15000 }
     ).catch(() => null);
 
     if (!formLoaded) {
@@ -182,10 +191,10 @@ class ProposalSubmitter {
       const retryProtected = await this._handleProtectedArea(page, log);
       if (retryProtected) {
         log('3b. "Área protegida" detectada en retry, esperando formulario...');
-        await this.bm.randomDelay(3000, 5000);
+        await this.bm.randomDelay(2000, 3000);
         await page.waitForFunction(
           () => document.querySelectorAll('textarea').length > 0,
-          { timeout: 20000 }
+          { timeout: 15000 }
         ).catch(() => null);
       }
       // Verificar de nuevo si el formulario cargó
@@ -197,7 +206,7 @@ class ProposalSubmitter {
       }
     }
 
-    await this.bm.randomDelay(2000, 3000);
+    await this.bm.randomDelay(1500, 2500);
     const formUrl = page.url();
     log(`3. Formulario cargado. URL: ${formUrl}`);
 
@@ -432,15 +441,15 @@ class ProposalSubmitter {
   // =============================================
 
   async _verifyAlreadySent(page, projectUrl, log) {
-    // 1. Verificar en la página del proyecto
+    // Verificar solo re-visitando la página del proyecto (rápido)
+    // Eliminada verificación vía /my_projects — añadía ~60s y causaba timeouts
     try {
-      await page.goto(projectUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      await this.bm.randomDelay(3000, 5000);
+      await page.goto(projectUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await this.bm.randomDelay(2000, 3000);
       await page.waitForFunction(
         () => document.body.innerText.length > 500,
-        { timeout: 15000 }
+        { timeout: 10000 }
       ).catch(() => {});
-      await this.bm.randomDelay(2000, 4000);
 
       const result = await this._checkIfAlreadyApplied(page);
       if (result.sent) {
@@ -450,30 +459,6 @@ class ProposalSubmitter {
       log(`Re-visita proyecto: ${result.reason}`);
     } catch (e) {
       log(`Error verificando en proyecto: ${e.message}`);
-    }
-
-    // 2. Verificar en /my-proposals (más fiable)
-    try {
-      const projectSlug = projectUrl.split('/job/')[1]?.split('?')[0]?.split('/')[0] || '';
-      if (projectSlug) {
-        log('Verificando en /my-proposals...');
-        await page.goto('https://www.workana.com/my_projects?type_company=worker', { waitUntil: 'networkidle2', timeout: 30000 });
-        await this.bm.randomDelay(2000, 4000);
-        await page.waitForFunction(() => document.body.innerText.length > 500, { timeout: 15000 }).catch(() => {});
-
-        const found = await page.evaluate((slug) => {
-          const links = [...document.querySelectorAll('a')];
-          return links.some(a => (a.href || '').includes(slug));
-        }, projectSlug);
-
-        if (found) {
-          log('✅ Proyecto encontrado en /my-proposals — confirmado enviado');
-          return true;
-        }
-        log('Proyecto NO encontrado en /my-proposals — se reintentará');
-      }
-    } catch (e) {
-      log(`Error verificando /my-proposals: ${e.message}`);
     }
 
     return false;
@@ -1170,7 +1155,7 @@ class ProposalSubmitter {
 
   async _waitForSubmitResult(page) {
     await Promise.race([
-      page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+      page.waitForNavigation({ timeout: 10000 }).catch(() => null),
       page.waitForFunction(
         () => {
           const text = document.body.innerText.toLowerCase();
@@ -1178,10 +1163,10 @@ class ProposalSubmitter {
             text.includes('felicitaciones') || text.includes('proposal sent') ||
             text.includes('especifique un alcance') || text.includes('campo obligatorio');
         },
-        { timeout: 15000 }
+        { timeout: 10000 }
       ).catch(() => null),
     ]);
-    await this.bm.randomDelay(2000, 3000);
+    await this.bm.randomDelay(1500, 2500);
   }
 
   // =============================================
