@@ -8,7 +8,9 @@ class ProposalSubmitter {
     const startTime = Date.now();
     const log = (msg) => console.log(`[Submitter] ${msg}`);
     const screenshots = {};
-    const MAX_SUBMIT_ATTEMPTS = 2;
+    // UN SOLO INTENTO — reintentar causa duplicados porque el submit SÍ funciona
+    // pero la detección de éxito falla. Mejor fallar una vez que enviar 2x.
+    const MAX_SUBMIT_ATTEMPTS = 1;
     const MAX_TOTAL_TIME_MS = 210000; // 3.5 min — abortar antes del enqueue timeout (5 min)
     const isTimedOut = () => (Date.now() - startTime) > MAX_TOTAL_TIME_MS;
 
@@ -1029,13 +1031,14 @@ class ProposalSubmitter {
     console.log(`[Submitter] State: ${JSON.stringify(pageState)}`);
 
     // =============================================
-    // DETECCIÓN ULTRA-CONSERVADORA — SOLO 3 VÍAS DE ÉXITO
-    // + 1 VÍA DE VERIFICACIÓN (re-visita al proyecto)
-    // Prefiere falso negativo (dice que falló cuando sí se envió)
-    // a falso positivo (dice que se envió cuando NO se envió)
+    // DETECCIÓN ANTI-DUPLICADOS
+    // Filosofía: si el formulario desapareció y la URL cambió,
+    // es MUY probable que se envió. Mejor reportar éxito
+    // que reintentar y causar un duplicado.
+    // Solo reportar fallo cuando es EVIDENTE (validación, formulario visible).
     // =============================================
 
-    // ÉXITO 1: Texto explícito de confirmación en la página
+    // ÉXITO 1: Texto explícito de confirmación
     if (pageState.hasSuccess) {
       return { success: true, message: 'Propuesta enviada (confirmación en página)', url: currentUrl, pageState };
     }
@@ -1045,68 +1048,35 @@ class ProposalSubmitter {
       return { success: true, message: 'Propuesta ya enviada anteriormente', url: currentUrl, pageState };
     }
 
-    // ÉXITO 3: URL redirigió a /inbox/ (comportamiento real de Workana tras enviar)
-    if (currentUrl.includes('/inbox/')) {
-      return { success: true, message: 'Propuesta enviada (redirigido a inbox)', url: currentUrl, pageState };
+    // ÉXITO 3: URL redirigió a /inbox/ o /messages/ (redirección normal de Workana)
+    if (currentUrl.includes('/inbox/') || currentUrl.includes('/messages/index/')) {
+      return { success: true, message: 'Propuesta enviada (redirigido a mensajes)', url: currentUrl, pageState };
     }
 
-    // FALLO CLARO: Redirección a página de búsqueda de proyectos (/jobs)
-    // Esto ocurre cuando requestSubmit() activó el form incorrecto.
-    // TERMINAL: no reintentar porque requestSubmit() puede haber enviado silenciosamente
-    // (Workana procesa pero redirige a /jobs). Reintentar causaría propuestas duplicadas.
-    if (currentUrl.includes('/jobs') && !currentUrl.includes('/jobs/')) {
-      return { success: false, message: `Submit redirigió a búsqueda de proyectos (${currentUrl}) — posible envío duplicado si se reintenta`, url: currentUrl, pageState, _terminal: true };
-    }
-
-    // Capturar bodySnippet INMEDIATAMENTE (ANTES de verificación)
-    // para diagnóstico — después de navegar a proyecto/my_projects se pierde
-    const immediateBodySnippet = await page.evaluate(() => {
-      return (document.body?.innerText || '').substring(0, 2000);
-    }).catch(() => '');
-
-    // =============================================
-    // CASO AMBIGUO: URL cambió, formulario no visible, sin errores
-    // → Verificar volviendo al proyecto para buscar "ya has enviado"
-    // =============================================
-
-    const isAmbiguous = currentUrl !== formUrl &&
-      !pageState.hasValidationError &&
-      !pageState.hasVisibleTextarea &&
-      !pageState.hasSubmitBtn;
-
-    if (isAmbiguous && projectUrl) {
-      console.log('[Submitter] Resultado ambiguo — verificando...');
-      const verified = await this._verifyAlreadySent(page, projectUrl, msg => console.log(`[Submitter] ${msg}`));
-      if (verified) {
-        return { success: true, message: 'Propuesta enviada (verificado tras resultado ambiguo)', url: currentUrl, pageState, verified: true };
-      }
-    }
-
-    // =============================================
-    // TODO LO DEMÁS → FALLO (con diagnóstico detallado)
-    // =============================================
-
-    // Mensaje descriptivo según lo que vemos
-    let failMessage;
+    // FALLO CLARO 1: Error de validación (campos vacíos, alcance no seleccionado)
     if (pageState.hasValidationError) {
-      failMessage = 'Error de validación del formulario';
-    } else if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn) {
-      failMessage = 'Formulario sigue visible con botón submit — no se envió';
-    } else if (pageState.hasVisibleTextarea) {
-      failMessage = 'Formulario sigue visible (sin botón submit) — submit no navegó';
-    } else if (currentUrl === formUrl) {
-      failMessage = 'URL no cambió y formulario no visible — estado desconocido';
-    } else {
-      failMessage = `URL cambió a ${currentUrl} pero SIN confirmación explícita de éxito (verificación también negativa)`;
+      return { success: false, message: 'Error de validación del formulario', url: currentUrl, pageState, _terminal: true };
     }
 
-    // bodySnippet inmediato = página justo después de submit (ANTES de verificación)
-    // bodySnippet final = página después de verificación (puede ser /my_projects)
-    const finalBodySnippet = await page.evaluate(() => {
-      return (document.body?.innerText || '').substring(0, 2000);
-    }).catch(() => '');
+    // FALLO CLARO 2: Formulario sigue visible con botón submit → no se envió
+    if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn) {
+      return { success: false, message: 'Formulario sigue visible — no se envió', url: currentUrl, pageState, _terminal: false };
+    }
 
-    return { success: false, message: failMessage, url: currentUrl, pageState, bodySnippet: immediateBodySnippet, bodySnippetAfterVerification: finalBodySnippet };
+    // ÉXITO PROBABLE: URL cambió Y formulario desapareció → Workana procesó el envío
+    // Esto cubre redirecciones a /messages/, /jobs, dashboard, etc.
+    // NUNCA reintentar en este caso — riesgo de duplicado
+    if (currentUrl !== formUrl && !pageState.hasVisibleTextarea) {
+      return { success: true, message: `Propuesta probablemente enviada (URL cambió a ${currentUrl}, formulario desapareció)`, url: currentUrl, pageState };
+    }
+
+    // URL no cambió pero formulario desapareció → estado incierto, marcar terminal
+    if (currentUrl === formUrl && !pageState.hasVisibleTextarea) {
+      return { success: false, message: 'URL no cambió pero formulario desapareció — estado incierto', url: currentUrl, pageState, _terminal: true };
+    }
+
+    // Cualquier otro caso → fallo terminal (no reintentar)
+    return { success: false, message: 'Estado desconocido tras submit', url: currentUrl, pageState, _terminal: true };
   }
 
   // =============================================
