@@ -173,6 +173,30 @@ class BrowserManager {
     return true;
   }
 
+  // Cerrar banner de cookies si existe
+  async _dismissCookieBanner(page) {
+    try {
+      const dismissed = await page.evaluate(() => {
+        // Buscar botón de aceptar cookies por texto
+        const patterns = ['Aceptar todas las cookies', 'Aceptar todas', 'Accept all', 'Aceptar cookies'];
+        for (const text of patterns) {
+          const btn = [...document.querySelectorAll('button, a')].find(el =>
+            el.textContent?.trim().toLowerCase().includes(text.toLowerCase())
+          );
+          if (btn) {
+            btn.click();
+            return text;
+          }
+        }
+        return null;
+      });
+      if (dismissed) {
+        console.log(`[Browser] Cookie banner cerrado: "${dismissed}"`);
+        await this.randomDelay(500, 1000);
+      }
+    } catch (_) {}
+  }
+
   // Login en Workana
   async login() {
     const page = await this.newPage();
@@ -208,6 +232,9 @@ class BrowserManager {
         this.loggedIn = true;
         return { success: true, message: 'Ya estás logueado (sesión previa)' };
       }
+
+      // Cerrar banner de cookies ANTES de interactuar con el formulario
+      await this._dismissCookieBanner(page);
 
       // Buscar campo de email (Workana puede usar diferentes selectores)
       const emailSelectors = [
@@ -276,7 +303,7 @@ class BrowserManager {
 
       await this.randomDelay(1000, 2000);
 
-      // Click en botón de login
+      // Click en botón de login — intentar múltiples estrategias
       const submitSelectors = [
         'button[type="submit"]',
         'input[type="submit"]',
@@ -284,9 +311,39 @@ class BrowserManager {
         '#login-submit',
       ];
 
+      let submitClicked = false;
       for (const sel of submitSelectors) {
         const clicked = await this.humanClick(page, sel);
-        if (clicked) break;
+        if (clicked) {
+          submitClicked = true;
+          console.log(`[Browser] Login submit clicked: ${sel}`);
+          break;
+        }
+      }
+
+      // Fallback: buscar por texto del botón
+      if (!submitClicked) {
+        submitClicked = await page.evaluate(() => {
+          const patterns = ['Ingresa', 'Iniciar sesión', 'Login', 'Sign in', 'Entrar'];
+          for (const text of patterns) {
+            const btn = [...document.querySelectorAll('button, input[type="submit"]')].find(el =>
+              (el.textContent?.trim() || el.value || '').toLowerCase().includes(text.toLowerCase())
+            );
+            if (btn) {
+              btn.click();
+              return true;
+            }
+          }
+          return false;
+        });
+        if (submitClicked) console.log('[Browser] Login submit clicked via text fallback');
+      }
+
+      if (!submitClicked) {
+        return {
+          success: false,
+          message: 'No se encontró botón de login para clickar.',
+        };
       }
 
       // Esperar navegación
@@ -301,11 +358,29 @@ class BrowserManager {
       this.loggedIn =
         !currentUrl.includes('/login') && !currentUrl.includes('/signin');
 
+      // Si falló, capturar diagnóstico
+      if (!this.loggedIn) {
+        const diagnosis = await page.evaluate(() => {
+          const body = document.body?.innerText?.substring(0, 500) || '';
+          const hasError = body.toLowerCase().includes('error') ||
+                          body.toLowerCase().includes('incorrecto') ||
+                          body.toLowerCase().includes('invalid') ||
+                          body.toLowerCase().includes('incorrect');
+          const hasCaptcha = !!document.querySelector('[class*="captcha"], [class*="challenge"], iframe[src*="captcha"], iframe[src*="turnstile"]');
+          return { hasError, hasCaptcha, bodySnippet: body.substring(0, 200) };
+        });
+        console.log('[Browser] Login diagnosis:', JSON.stringify(diagnosis));
+
+        let reason = `Login fallido. URL: ${currentUrl}`;
+        if (diagnosis.hasCaptcha) reason += ' (CAPTCHA/Challenge detectado)';
+        if (diagnosis.hasError) reason += ' (Error visible en página)';
+
+        return { success: false, message: reason, url: currentUrl, diagnosis };
+      }
+
       return {
-        success: this.loggedIn,
-        message: this.loggedIn
-          ? 'Login exitoso'
-          : `Login fallido. URL: ${currentUrl}`,
+        success: true,
+        message: 'Login exitoso',
         url: currentUrl,
       };
     } catch (error) {
