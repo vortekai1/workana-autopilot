@@ -376,51 +376,11 @@ class ProposalSubmitter {
     }
 
     // 11. Esperar resultado — navegación O cambio en la página
-    log('11. Esperando resultado (navegación o cambio en página)...');
+    // IMPORTANTE: Solo UN submit. NO reintentar con requestSubmit ni clicks adicionales.
+    // Si el click del paso 10 funcionó pero Workana tarda en procesar, los re-submits
+    // interfieren y causan estados inconsistentes.
+    log('11. Esperando resultado (hasta 15s para navegación o cambio en página)...');
     await this._waitForSubmitResult(page);
-
-    // 11b. Si la URL no cambió, intentar requestSubmit como fallback
-    // IMPORTANTE: Solo usar requestSubmit del form que CONTIENE el textarea bid[content]
-    // para evitar enviar el form del chat lateral
-    if (page.url() === formUrl) {
-      log('11b. URL no cambió — intentando form.requestSubmit() como fallback...');
-      const rsResult = await page.evaluate(() => {
-        // Buscar ESPECÍFICAMENTE el form que contiene bid[content]
-        const textarea = document.querySelector('textarea[name="bid[content]"]');
-        if (!textarea) return 'no textarea bid[content]';
-        const form = textarea.closest('form');
-        if (!form) return 'textarea no está dentro de un form';
-        // Verificar que es el form correcto (debe tener action relacionado con bid/proposal)
-        const action = (form.action || '').toLowerCase();
-        const formId = (form.id || '').toLowerCase();
-        const isBidForm = action.includes('bid') || action.includes('proposal') ||
-                          action.includes('messages') || formId.includes('bid') ||
-                          form.querySelector('input[name="bid[amount]"]') !== null;
-        if (!isBidForm) return `form encontrado pero no parece ser de propuesta (action=${form.action}, id=${form.id})`;
-        if (typeof form.requestSubmit === 'function') {
-          try { form.requestSubmit(); return 'ok'; } catch (e) { return `error: ${e.message}`; }
-        }
-        return 'requestSubmit not available';
-      });
-      log(`11b. requestSubmit fallback: ${rsResult}`);
-
-      if (rsResult === 'ok') {
-        await this._waitForSubmitResult(page);
-      }
-    }
-
-    // 11c. Si TODAVÍA no cambió, intentar click nativo de nuevo (por si overlay se fue)
-    if (page.url() === formUrl && submitInfo.found) {
-      log('11c. URL aún no cambió — reintentando click nativo...');
-      try {
-        await this._dismissCookieConsent(page);
-        await page.click('[data-wk-submit="1"]');
-        log('11c. Click nativo reintento OK');
-      } catch (e) {
-        log(`11c. Click reintento falló: ${e.message}`);
-      }
-      await this._waitForSubmitResult(page);
-    }
 
     const finalUrl = page.url();
     log(`11. URL final: ${finalUrl}`);
@@ -428,7 +388,29 @@ class ProposalSubmitter {
     if (debug) screenshots[`afterSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
 
     // 12. Verificar resultado
-    const result = await this._checkSubmissionResult(page, formUrl, projectUrl);
+    let result = await this._checkSubmissionResult(page, formUrl);
+
+    // 12b. VERIFICACIÓN SECUNDARIA: si el resultado es fallo NO terminal,
+    // esperar un poco más y re-visitar el proyecto para confirmar
+    if (!result.success && !result._terminal) {
+      log('12b. Resultado incierto — verificación secundaria re-visitando proyecto...');
+      await this.bm.randomDelay(3000, 5000);
+      try {
+        const alreadySent = await this._verifyAlreadySent(page, projectUrl, log);
+        if (alreadySent) {
+          log('12b. ✅ Verificación secundaria confirmó envío');
+          result = {
+            success: true,
+            message: 'Propuesta enviada (verificado re-visitando proyecto)',
+            verified: true,
+            url: finalUrl,
+          };
+        }
+      } catch (verifyErr) {
+        log(`12b. Error en verificación secundaria: ${verifyErr.message}`);
+      }
+    }
+
     result.formInfo = formInfo;
     result.fieldValues = fieldValues;
     result.formUrl = formUrl;
@@ -996,7 +978,7 @@ class ProposalSubmitter {
   // VERIFICAR RESULTADO DEL ENVÍO
   // =============================================
 
-  async _checkSubmissionResult(page, formUrl, projectUrl) {
+  async _checkSubmissionResult(page, formUrl) {
     const currentUrl = page.url();
 
     const pageState = await page.evaluate(() => {
@@ -1125,7 +1107,7 @@ class ProposalSubmitter {
 
   async _waitForSubmitResult(page) {
     await Promise.race([
-      page.waitForNavigation({ timeout: 10000 }).catch(() => null),
+      page.waitForNavigation({ timeout: 15000 }).catch(() => null),
       page.waitForFunction(
         () => {
           const text = document.body.innerText.toLowerCase();
@@ -1133,10 +1115,10 @@ class ProposalSubmitter {
             text.includes('felicitaciones') || text.includes('proposal sent') ||
             text.includes('especifique un alcance') || text.includes('campo obligatorio');
         },
-        { timeout: 10000 }
+        { timeout: 15000 }
       ).catch(() => null),
     ]);
-    await this.bm.randomDelay(1500, 2500);
+    await this.bm.randomDelay(2000, 3000);
   }
 
   // =============================================
