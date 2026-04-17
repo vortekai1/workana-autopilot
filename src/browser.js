@@ -192,7 +192,9 @@ class BrowserManager {
       });
       if (dismissed) {
         console.log(`[Browser] Cookie banner cerrado: "${dismissed}"`);
-        await this.randomDelay(500, 1000);
+        // Esperar por si el click causa un reload de la página
+        await page.waitForNavigation({ timeout: 3000 }).catch(() => null);
+        await this.randomDelay(1000, 2000);
       }
     } catch (_) {}
   }
@@ -384,6 +386,19 @@ class BrowserManager {
         url: currentUrl,
       };
     } catch (error) {
+      // "Execution context was destroyed" = la página navegó durante una operación.
+      // Esto puede significar que el login SÍ funcionó. Verificar sesión antes de reportar fallo.
+      if (error.message.includes('Execution context was destroyed')) {
+        console.log('[Browser] Execution context destroyed — verificando si login fue exitoso...');
+        try {
+          await this.randomDelay(3000, 5000);
+          const url = page.url();
+          if (url && !url.includes('/login') && !url.includes('/signin')) {
+            this.loggedIn = true;
+            return { success: true, message: 'Login exitoso (confirmado tras navegación)', url };
+          }
+        } catch (_) {}
+      }
       return { success: false, message: `Error de login: ${error.message}` };
     } finally {
       await page.close();
