@@ -390,9 +390,10 @@ class ProposalSubmitter {
     // 12. Verificar resultado
     let result = await this._checkSubmissionResult(page, formUrl);
 
-    // 12b. VERIFICACIÓN SECUNDARIA: si el resultado es fallo NO terminal,
-    // esperar un poco más y re-visitar el proyecto para confirmar
-    if (!result.success && !result._terminal) {
+    // 12b. VERIFICACIÓN SECUNDARIA: si el resultado es fallo (cualquier tipo),
+    // re-visitar el proyecto para confirmar. Aplica tanto a fallos terminales
+    // como no terminales — el submit pudo funcionar aunque la detección falle.
+    if (!result.success) {
       log('12b. Resultado incierto — verificación secundaria re-visitando proyecto...');
       await this.bm.randomDelay(3000, 5000);
       try {
@@ -425,8 +426,9 @@ class ProposalSubmitter {
   // =============================================
 
   async _verifyAlreadySent(page, projectUrl, log) {
-    // Verificar solo re-visitando la página del proyecto (rápido)
-    // Eliminada verificación vía /my_projects — añadía ~60s y causaba timeouts
+    // Verificar re-visitando la página del proyecto
+    // Post-submit: usamos criterios MÁS agresivos que _checkIfAlreadyApplied
+    // porque acabamos de intentar enviar → si el botón desapareció, fue exitoso
     try {
       await page.goto(projectUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
       await this.bm.randomDelay(2000, 3000);
@@ -435,11 +437,21 @@ class ProposalSubmitter {
         { timeout: 10000 }
       ).catch(() => {});
 
+      // Check 1: texto explícito de confirmación (más fiable)
       const result = await this._checkIfAlreadyApplied(page);
       if (result.sent) {
         log(`✅ Re-visita confirmó envío: ${result.reason}`);
         return true;
       }
+
+      // Check 2: botón "Enviar propuesta" ausente = evidencia fuerte post-submit
+      // _checkIfAlreadyApplied es conservadora (no cuenta botón ausente sin texto),
+      // pero tras un submit, si el botón desapareció → propuesta enviada
+      if (result.reason && result.reason.includes('botón ausente')) {
+        log(`✅ Re-visita: botón "Enviar propuesta" ausente tras submit — confirmando envío`);
+        return true;
+      }
+
       log(`Re-visita proyecto: ${result.reason}`);
     } catch (e) {
       log(`Error verificando en proyecto: ${e.message}`);
@@ -1006,7 +1018,10 @@ class ProposalSubmitter {
       const submitInput = document.querySelector('input[type="submit"]');
       const hasSubmitBtn = submitInput && submitInput.offsetHeight > 0;
 
-      return { hasSuccess, alreadySent, hasValidationError, hasVisibleTextarea, hasSubmitBtn, bodyLength: bodyText.length };
+      // Capturar snippet del body para diagnóstico (primeros 300 chars)
+      const bodySnippet = bodyText.substring(0, 300);
+
+      return { hasSuccess, alreadySent, hasValidationError, hasVisibleTextarea, hasSubmitBtn, bodyLength: bodyText.length, bodySnippet };
     });
 
     console.log(`[Submitter] Check: formUrl=${formUrl}, currentUrl=${currentUrl}`);
