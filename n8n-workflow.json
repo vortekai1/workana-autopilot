@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 30
+              "minutesInterval": 10
             }
           ]
         }
       },
       "id": "schedule-trigger",
-      "name": "Cada 30 min",
+      "name": "Cada 10 min",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -38,7 +38,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Check Horario: solo lógica de tiempo/día, sin HTTP\nconst config = $input.first().json;\nconst now = new Date();\nconst madridTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst hour = madridTime.getHours();\nconst day = madridTime.getDay();\n\nif (hour < 8 || hour >= 22 || day === 0) {\n  console.log('Fuera de horario: hora=' + hour + ', día=' + day);\n  return [];\n}\n\nfunction seededRandom(seed) {\n  const x = Math.sin(seed * 9999) * 10000;\n  return x - Math.floor(x);\n}\nconst oneJan = new Date(madridTime.getFullYear(), 0, 1);\nconst weekNumber = Math.ceil(((madridTime - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);\nconst weekSeed = madridTime.getFullYear() * 100 + weekNumber;\nconst minWeek = config.MAX_PROPOSALS_WEEK_MIN || 50;\nconst maxWeek = config.MAX_PROPOSALS_WEEK_MAX || 60;\nconst weeklyTarget = Math.floor(minWeek + seededRandom(weekSeed) * (maxWeek - minWeek + 1));\n\nconst dayOfWeek = day === 0 ? 7 : day;\nconst madridDateStr = madridTime.toISOString().split('T')[0];\nconst mondayDate = new Date(madridDateStr + 'T00:00:00');\nmondayDate.setDate(mondayDate.getDate() - (dayOfWeek - 1));\nconst mondayStr = mondayDate.toISOString().split('T')[0];\nconst refDate = new Date(mondayStr + 'T12:00:00Z');\nconst madridRef = new Date(refDate.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst utcRef = new Date(refDate.toLocaleString('en-US', { timeZone: 'UTC' }));\nconst madridOffsetMs = madridRef - utcRef;\nconst mondayMidnightUTC = new Date(new Date(mondayStr + 'T00:00:00').getTime() - madridOffsetMs);\nconst startISO = mondayMidnightUTC.toISOString();\n\nconsole.log('Horario OK: hora=' + hour + ', día=' + day + ', startISO=' + startISO + ', weeklyTarget=' + weeklyTarget);\n\nreturn [{\n  json: {\n    ...config,\n    startISO: startISO,\n    weeklyTarget: weeklyTarget,\n    hour: hour,\n    day: day,\n    dayOfWeek: dayOfWeek,\n    timestamp: now.toISOString()\n  }\n}];"
+        "jsCode": "// Check Horario: solo lógica de tiempo/día, sin HTTP\nconst config = $input.first().json;\nconst now = new Date();\nconst madridTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst hour = madridTime.getHours();\nconst day = madridTime.getDay();\n\nif (hour < 8 || hour >= 22) {\n  console.log('Fuera de horario: hora=' + hour + ', día=' + day);\n  return [];\n}\n\nfunction seededRandom(seed) {\n  const x = Math.sin(seed * 9999) * 10000;\n  return x - Math.floor(x);\n}\nconst oneJan = new Date(madridTime.getFullYear(), 0, 1);\nconst weekNumber = Math.ceil(((madridTime - oneJan) / 86400000 + oneJan.getDay() + 1) / 7);\nconst weekSeed = madridTime.getFullYear() * 100 + weekNumber;\nconst minWeek = config.MAX_PROPOSALS_WEEK_MIN || 50;\nconst maxWeek = config.MAX_PROPOSALS_WEEK_MAX || 60;\nconst weeklyTarget = Math.floor(minWeek + seededRandom(weekSeed) * (maxWeek - minWeek + 1));\n\nconst dayOfWeek = day === 0 ? 7 : day;\nconst madridDateStr = madridTime.toISOString().split('T')[0];\nconst mondayDate = new Date(madridDateStr + 'T00:00:00');\nmondayDate.setDate(mondayDate.getDate() - (dayOfWeek - 1));\nconst mondayStr = mondayDate.toISOString().split('T')[0];\nconst refDate = new Date(mondayStr + 'T12:00:00Z');\nconst madridRef = new Date(refDate.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }));\nconst utcRef = new Date(refDate.toLocaleString('en-US', { timeZone: 'UTC' }));\nconst madridOffsetMs = madridRef - utcRef;\nconst mondayMidnightUTC = new Date(new Date(mondayStr + 'T00:00:00').getTime() - madridOffsetMs);\nconst startISO = mondayMidnightUTC.toISOString();\n\nconsole.log('Horario OK: hora=' + hour + ', día=' + day + ', startISO=' + startISO + ', weeklyTarget=' + weeklyTarget);\n\nreturn [{\n  json: {\n    ...config,\n    startISO: startISO,\n    weeklyTarget: weeklyTarget,\n    hour: hour,\n    day: day,\n    dayOfWeek: dayOfWeek,\n    timestamp: now.toISOString()\n  }\n}];"
       },
       "id": "check-horario",
       "name": "Check Horario",
@@ -789,7 +789,7 @@
     }
   ],
   "connections": {
-    "Cada 30 min": {
+    "Cada 10 min": {
       "main": [
         [
           {
