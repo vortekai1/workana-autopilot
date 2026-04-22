@@ -380,9 +380,10 @@ class BrowserManager {
 
       await this.randomDelay(2000, 3000);
 
-      // Verificar login exitoso
+      // Verificar login exitoso — URL debe ser de Workana (no chrome-error://)
       const currentUrl = page.url();
       this.loggedIn =
+        currentUrl.includes('workana.com') &&
         !currentUrl.includes('/login') && !currentUrl.includes('/signin');
 
       // Si falló, capturar diagnóstico
@@ -418,7 +419,8 @@ class BrowserManager {
         try {
           await this.randomDelay(3000, 5000);
           const url = page.url();
-          if (url && !url.includes('/login') && !url.includes('/signin')) {
+          // Validar que la URL sea realmente de Workana (no chrome-error:// u otras)
+          if (url && url.includes('workana.com') && !url.includes('/login') && !url.includes('/signin')) {
             this.loggedIn = true;
             return { success: true, message: 'Login exitoso (confirmado tras navegación)', url };
           }
