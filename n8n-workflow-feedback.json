@@ -37,7 +37,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{$json.PUPPETEER_URL}}/my-proposals?page=1",
+        "url": "={{$json.PUPPETEER_URL}}/my-proposals?page=1&maxPages=5",
         "options": {
           "timeout": 180000
         }
@@ -71,7 +71,7 @@
     {
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_projects?workana_url=eq.{{ encodeURIComponent($json.project_url) }}",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_projects?workana_url=eq.{{ $json.project_url }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

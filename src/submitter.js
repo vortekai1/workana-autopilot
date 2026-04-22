@@ -310,10 +310,14 @@ class ProposalSubmitter {
       return { success: false, message: 'ABORT: Texto de propuesta vacío en el DOM — el framework no reconoció el texto', fieldValues, formInfo, formUrl, _terminal: false };
     }
     if (!fieldValues.budgetAmount || fieldValues.budgetAmount === 'NO ENCONTRADO' || fieldValues.budgetAmount === '') {
-      log('⚠️ Budget vacío — continuando igualmente (puede ser por horas)');
+      log('⚠️ Budget vacío — campo posiblemente no visible en este tipo de proyecto');
     }
     if (fieldValues.taskScopesTotal > 0 && fieldValues.taskScopesEmpty > 0) {
-      log(`⚠️ ${fieldValues.taskScopesEmpty}/${fieldValues.taskScopesTotal} task scopes vacíos`);
+      if (fieldValues.taskScopesFilled === 0) {
+        log("ABORT: Todos los task scopes vacios, Workana rechazara el envio");
+        return { success: false, message: "ABORT: Task scopes obligatorios sin rellenar", fieldValues, formInfo, formUrl, _terminal: false };
+      }
+      log("WARN: " + fieldValues.taskScopesEmpty + "/" + fieldValues.taskScopesTotal + " task scopes vacios");
     }
 
     // Delay extra para que el framework MFE procese todos los eventos
@@ -1084,11 +1088,14 @@ class ProposalSubmitter {
     return page.evaluate(() => {
       const result = {};
 
-      // Textarea (propuesta)
+      // Textarea (propuesta) — usar .value con fallback a .textContent
+      // execCommand('insertText') actualiza .value en la mayoría de navegadores,
+      // pero en algunos casos (Chromium headless) puede quedar desincronizado.
       const textarea = document.querySelector('textarea[name="bid[content]"]') ||
         [...document.querySelectorAll('textarea')].find(t => t.offsetHeight > 20);
-      result.proposalText = textarea ? textarea.value.substring(0, 100) + (textarea.value.length > 100 ? '...' : '') : 'NO ENCONTRADO';
-      result.proposalLength = textarea ? textarea.value.length : 0;
+      const textValue = textarea ? (textarea.value || textarea.textContent || textarea.innerText || '') : '';
+      result.proposalText = textValue.substring(0, 100) + (textValue.length > 100 ? '...' : '');
+      result.proposalLength = textValue.length;
 
       // Budget
       const amountInput = document.querySelector('input[name="bid[amount]"]');

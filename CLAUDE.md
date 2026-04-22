@@ -292,9 +292,17 @@ WORKANA_PASSWORD=tu-password
 PORT=3500
 HEADLESS=true
 USER_DATA_DIR=./chrome-data
+API_KEY=                               # Opcional: si se define, protege todos los endpoints (excepto /health y /live)
 ```
 
-## Anti-Detección (12 medidas)
+## Seguridad API (server.js)
+
+- **API Key opcional**: Si `API_KEY` env var está definida, TODOS los endpoints (excepto `/health` y `/live*`) requieren Bearer token o `?api_key=` query param
+- **Backwards compatible**: Sin `API_KEY` definida, se comporta como antes (sin auth)
+- **CORS**: Incluye `Authorization` en `Access-Control-Allow-Headers`
+- **Validación de parámetros**: `/scrape-all` limita a max 5 páginas y 6 categorías; `/my-proposals` limita `maxPages` a 10
+
+## Anti-Detección (14 medidas)
 
 1. puppeteer-extra-plugin-stealth
 2. Delays aleatorios (1-6s entre acciones)
@@ -303,11 +311,13 @@ USER_DATA_DIR=./chrome-data
 5. Sesión persistente (cookies en volumen Docker)
 6. Horario humano (8:00-22:00, sin domingos)
 7. Rotación de User Agent — Pool de 5 Chrome UA, rotación diaria
-8. Headless con stealth flags
+8. Headless con stealth flags (`--disable-features=TranslateUI`, `--disable-default-apps`)
 9. Rate limiting entre páginas
 10. Cuota semanal probabilística (50-60/semana)
 11. Fatiga nocturna — Delays x1.5 después de las 20:00, x1.2 después de las 17:00
 12. Espera render MFE — `waitForFunction` antes de interactuar
+13. Cleanup páginas huérfanas — En timeout de enqueue, cierra páginas que quedaron abiertas
+14. Validación URL scraper — Solo acepta `https://www.workana.com/job/` (evita navegación a URLs externas)
 
 ## REGLA CRÍTICA: n8n Code Nodes — Sin HTTP
 
@@ -319,6 +329,17 @@ Los Code nodes de n8n ejecutan en un **sandbox** que bloquea:
 **TODAS las llamadas HTTP deben usar nodos HTTP Request nativos** (typeVersion 4.2). Los Code nodes SOLO pueden hacer transformación de datos (JavaScript puro).
 
 Si necesitas hacer múltiples llamadas HTTP condicionales, usa IF nodes + HTTP Request nodes en vez de lógica dentro de Code nodes.
+
+## Troubleshooting — Registro de Incidencias
+
+Ver **[INCIDENTS.md](INCIDENTS.md)** para el historial completo de incidencias con síntomas, causas raíz y soluciones.
+
+**Acción inmediata ante errores**: Antes de investigar desde cero, consulta la tabla de síntomas rápidos en INCIDENTS.md. Los problemas más comunes (sesión caída, redirect loop, timeouts, duplicados) ya están documentados con soluciones probadas.
+
+**Procedimiento estándar de recuperación**:
+```bash
+curl -s POST /clear-cookies → POST /login → GET /session-check
+```
 
 ## Notas de Desarrollo
 
@@ -335,5 +356,9 @@ Si necesitas hacer múltiples llamadas HTTP condicionales, usa IF nodes + HTTP R
 - **CORS habilitado** en server.js para que el dashboard acceda al health check.
 - Si el cron de n8n deja de ejecutar, **desactivar y reactivar** el workflow.
 - **Supabase REST default limit = 1000 filas** — SIEMPRE añadir `&limit=10000` en queries que necesiten todos los registros (ej: GET URLs Existentes).
-- **n8n item pairing**: Si un Code node usa `runOnceForAllItems`, los nodos downstream NO pueden usar `$('NombreNodo').item.json` — usar `$('NombreNodo').all()[$itemIndex]` en su lugar.
+- **n8n item pairing**: Si un Code node usa `runOnceForAllItems`, los nodos downstream NO pueden usar `$('NombreNodo').item.json` — usar `$('NombreNodo').all()[$itemIndex]` en su lugar. (Corregido en "Estructurar Datos").
 - **Filtrar Nuevos**: Cuando hay 0 proyectos nuevos, retorna `[]` (no un debug item). El flujo se detiene limpiamente sin error.
+- **Config propagation**: "Estructurar Datos" obtiene config de `$('CONFIG').first().json`, NO de `projectData.config`. "Obtener Detalles" incluye `config` en su output como respaldo.
+- **Feedback URL encoding**: NUNCA usar `encodeURIComponent()` en URLs de query a Supabase PostgREST — busca el string literal codificado en vez del original. El PATCH usa la URL cruda: `?workana_url=eq.{{ $json.project_url }}`.
+- **_verifyFormState fallback**: Lee `textarea.value || textarea.textContent || textarea.innerText` para cubrir edge cases donde `.value` no refleja el contenido tras `execCommand('insertText')`.
+- **_launchBrowser race condition**: `_launchPromise` NO se nullea en `finally` — solo en `catch` (error) y en el handler `disconnected`. Esto previene que un segundo caller lance otro browser mientras el primero arranca.

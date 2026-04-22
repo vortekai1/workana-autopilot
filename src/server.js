@@ -6,6 +6,10 @@ const { ProposalSubmitter } = require('./submitter');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+// API Key — opcional: si API_KEY no está definida, no se exige autenticación
+// Cuando se define, TODOS los endpoints (excepto /health y /live*) la requieren
+const API_KEY = process.env.API_KEY || '';
+
 // CORS - restringido a orígenes conocidos
 const ALLOWED_ORIGINS = [
   'https://mediumblue-butterfly-391367.hostingersite.com',
@@ -17,9 +21,22 @@ app.use((req, res, next) => {
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
   }
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
+// Middleware de autenticación (solo si API_KEY está configurada)
+app.use((req, res, next) => {
+  // Endpoints públicos: health, live
+  if (req.path === '/health' || req.path.startsWith('/live')) return next();
+  // Si no hay API_KEY configurada, permitir todo (backwards compatible)
+  if (!API_KEY) return next();
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.api_key;
+  if (token !== API_KEY) {
+    return res.status(401).json({ success: false, error: 'Unauthorized — API key requerida' });
+  }
   next();
 });
 
@@ -86,12 +103,16 @@ app.post('/scrape-all', async (req, res) => {
       language = 'es',
     } = req.body;
 
+    // Validación: limitar para evitar bloqueos por requests excesivos
+    const safePages = Math.min(Math.max(1, parseInt(pages) || 2), 5);
+    const safeCategories = (Array.isArray(categories) ? categories : [categories]).slice(0, 6);
+
     // Timeout largo: 4 categorías × 2 páginas × ~25s/página = ~200s típico
     const result = await browserManager.enqueue(async () => {
       const allProjects = [];
 
-      for (const category of categories) {
-        for (let p = 1; p <= pages; p++) {
+      for (const category of safeCategories) {
+        for (let p = 1; p <= safePages; p++) {
           const r = await scraper.scrapeSearchPage(category, p, language);
           if (r.success && r.projects.length > 0) {
             allProjects.push(...r.projects);
@@ -369,9 +390,10 @@ app.get('/live/frame', async (req, res) => {
 app.get('/my-proposals', async (req, res) => {
   try {
     const { page = 1, maxPages = 3 } = req.query;
-    // Timeout largo: hasta 3 páginas × ~30s/página + delays
+    const safeMaxPages = Math.min(Math.max(1, parseInt(maxPages) || 3), 10);
+    // Timeout largo: hasta N páginas × ~30s/página + delays
     const result = await browserManager.enqueue(() =>
-      scraper.scrapeMyProposals(parseInt(page), parseInt(maxPages))
+      scraper.scrapeMyProposals(parseInt(page), safeMaxPages)
     , 180000);
     res.json(result);
   } catch (error) {

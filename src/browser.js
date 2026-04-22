@@ -27,7 +27,10 @@ class BrowserManager {
     }
 
     // Crear promise compartida para que todos los callers puedan await
-    this._launchPromise = (async () => {
+    // IMPORTANTE: NO nullear _launchPromise en finally — causa race condition
+    // donde otro caller entra entre el finally y el return, lanza un 2do browser
+    // y cierra el primero. Solo nullear en catch (para reintentar) y en disconnected.
+    const launchP = (async () => {
       try {
         if (this.browser) {
           try { await this.browser.close(); } catch (_) {}
@@ -42,6 +45,8 @@ class BrowserManager {
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--disable-dev-shm-usage',
+            '--disable-features=TranslateUI',
+            '--disable-default-apps',
             '--window-size=1920,1080',
             '--lang=es-ES',
           ],
@@ -53,25 +58,32 @@ class BrowserManager {
           console.error('[Browser] Chromium desconectado — re-lanzando...');
           this.browser = null;
           this.loggedIn = false;
-          this._launchPromise = null;
+          this._launchPromise = null; // Permitir nuevo lanzamiento
           this._launchBrowser().catch(err => {
             console.error('[Browser] Error re-lanzando:', err.message);
           });
         });
 
         console.log('[Browser] Chromium lanzado correctamente');
-      } finally {
-        this._launchPromise = null;
+      } catch (err) {
+        // Solo nullear en error para que el próximo caller reintente
+        if (this._launchPromise === launchP) {
+          this._launchPromise = null;
+        }
+        throw err;
       }
     })();
 
-    return this._launchPromise;
+    this._launchPromise = launchP;
+    return launchP;
   }
 
   // Ensure browser is alive, re-launch if needed
   async _ensureBrowser() {
     if (!this.browser || !this.browser.connected) {
       console.log('[Browser] Browser no disponible, re-lanzando...');
+      // Forzar nuevo lanzamiento limpiando la promise anterior (pudo quedar stale)
+      this._launchPromise = null;
       await this._launchBrowser();
     }
   }
@@ -91,14 +103,27 @@ class BrowserManager {
   // Esto previene que dos requests simultáneas sobrecargen Chromium
   // o disparen anti-detección por actividad paralela
   enqueue(fn, timeoutMs = 120000) {
-    const op = this._operationQueue.then(() => {
+    const op = this._operationQueue.then(async () => {
       return Promise.race([
         fn(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error(`Operation timeout (${Math.round(timeoutMs/1000)}s)`)), timeoutMs)
         )
       ]);
-    }).catch(err => {
+    }).catch(async (err) => {
+      // Si fue timeout, intentar cerrar páginas huérfanas que la operación dejó abiertas
+      if (err.message.includes('Operation timeout') && this.browser?.connected) {
+        try {
+          const pages = await this.browser.pages();
+          // Cerrar todas excepto about:blank (la primera) — las operaciones abren páginas nuevas
+          if (pages.length > 1) {
+            console.warn(`[Browser] Timeout — cerrando ${pages.length - 1} páginas huérfanas`);
+            for (let i = 1; i < pages.length; i++) {
+              await pages[i].close().catch(() => {});
+            }
+          }
+        } catch (_) {}
+      }
       console.error('[Browser] Error en operación encolada:', err.message);
       throw err;
     });

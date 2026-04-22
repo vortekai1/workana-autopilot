@@ -228,7 +228,7 @@
     {
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $('Evaluar Resultado').item.json.SUPABASE_URL }}/rest/v1/workana_projects?id=eq.{{ $('Evaluar Resultado').item.json.projectId }}",
+        "url": "={{ $('Evaluar Resultado').item.json.SUPABASE_URL }}/rest/v1/workana_projects?workana_url=eq.{{ $('Evaluar Resultado').item.json.projectUrl }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

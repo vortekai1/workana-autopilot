@@ -68,7 +68,7 @@ class WorkanaScraper {
                 '[class*="proposal"], [class*="bid"]'
               );
 
-              if (title && href.includes('/job/')) {
+              if (title && href.includes('/job/') && title.length > 10) {
                 items.push({
                   title: title.substring(0, 200),
                   url: href.split('?')[0], // URL limpia sin query params
@@ -144,6 +144,11 @@ class WorkanaScraper {
 
   // Obtener detalles completos de un proyecto
   async getProjectDetails(projectUrl) {
+    // Validar URL antes de navegar
+    if (!projectUrl || !projectUrl.startsWith('https://www.workana.com/job/')) {
+      return { success: false, error: `URL inválida: ${projectUrl}` };
+    }
+
     const page = await this.bm.newPage();
 
     try {
@@ -226,20 +231,28 @@ class WorkanaScraper {
         // Fecha de publicación
         const publishDate = getText('time', '.published-date', '[class*="publish"]');
 
+        // Helper: extraer número limpiando separadores de miles (12,345 → 12345, 1.234 → 1234)
+        const parseNum = (text) => {
+          if (!text) return null;
+          const m = text.match(/(\d[\d.,]*\d|\d)/);
+          if (!m) return null;
+          // Quitar separadores de miles (coma o punto según contexto)
+          const clean = m[1].replace(/[.,](?=\d{3})/g, '');
+          return parseInt(clean) || null;
+        };
+
         // Proyectos publicados por el cliente
         const clientProjectsText = getText(
           '.client-projects', '.employer-projects',
           '[class*="projects-posted"]', '[class*="jobs-posted"]'
         );
-        const clientProjectsMatch = clientProjectsText.match(/(\d+)/);
-        const clientProjectsPosted = clientProjectsMatch ? parseInt(clientProjectsMatch[1]) : null;
+        const clientProjectsPosted = parseNum(clientProjectsText);
 
         // Tasa de contratación del cliente
         const hireRateText = getText(
           '.hire-rate', '[class*="hire"]', '[class*="contratacion"]'
         );
-        const hireRateMatch = hireRateText.match(/(\d+)/);
-        const clientHireRate = hireRateMatch ? parseInt(hireRateMatch[1]) : null;
+        const clientHireRate = parseNum(hireRateText);
 
         return {
           title,
