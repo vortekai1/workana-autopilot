@@ -296,145 +296,245 @@ class WorkanaScraper {
         const url = `https://www.workana.com/worker/proposals?page=${p}`;
         console.log(`[Scraper] Navegando a mis propuestas: ${url}`);
 
-        // Interceptar respuestas API del MFE para capturar datos JSON con URLs de proyecto
+        // Interceptar TODAS las respuestas JSON (MFE puede usar cualquier endpoint)
         const apiData = [];
         page.on('response', async (response) => {
           try {
-            const reqUrl = response.url();
-            // Capturar peticiones API que puedan contener datos de propuestas
-            if (reqUrl.includes('/api/') || reqUrl.includes('/graphql') ||
-                reqUrl.includes('bids') || reqUrl.includes('proposals') ||
-                reqUrl.includes('worker')) {
-              const contentType = response.headers()['content-type'] || '';
-              if (contentType.includes('json')) {
-                const text = await response.text();
-                if (text.includes('/job/') || text.includes('project')) {
-                  apiData.push({ url: reqUrl, data: text.substring(0, 50000) });
-                }
+            const contentType = response.headers()['content-type'] || '';
+            if (contentType.includes('json') && response.status() === 200) {
+              const text = await response.text();
+              if (text.length > 100) {
+                apiData.push({ url: response.url(), data: text.substring(0, 50000) });
               }
             }
-          } catch (_) { /* respuestas que ya se consumieron */ }
+          } catch (_) { /* respuestas ya consumidas */ }
         });
 
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-        await this.bm.randomDelay(2000, 4000);
+        await this.bm.randomDelay(3000, 5000);
 
-        // Esperar a que el MFE renderice contenido (buscar timestamps como "Hace X horas")
-        await page.waitForFunction(
-          () => document.body.innerText.includes('Hace') || document.body.innerText.includes('ago'),
+        // Esperar MFE renderizado — múltiples indicadores
+        const mfeReady = await page.waitForFunction(
+          () => {
+            const text = document.body.innerText || '';
+            return text.includes('Hace') || text.includes('ago') ||
+              text.includes('propuesta') || text.includes('proposal') ||
+              text.length > 3000;
+          },
           { timeout: 15000 }
-        ).catch(() => console.log('[Scraper] Timeout esperando render MFE en propuestas'));
+        ).catch(() => null);
+        if (!mfeReady) console.log('[Scraper] Timeout esperando MFE en propuestas');
 
         await this._gradualScroll(page);
         await this.bm.randomDelay(1000, 2000);
 
-        // Estrategia 1: Intentar extraer URLs de las respuestas API interceptadas
+        // DEBUG: Logear estructura de la página para diagnóstico
+        const debugInfo = await page.evaluate(() => {
+          const text = document.body.innerText || '';
+          const html = document.body.innerHTML || '';
+          // Contar timestamps
+          const tsCount = (text.match(/Hace \d+/gi) || []).length;
+          // Contar links /job/
+          const jobLinks = document.querySelectorAll('a[href*="/job/"]').length;
+          // Buscar contenedores MFE (Vue data-v-*)
+          const vueComponents = document.querySelectorAll('[data-v-]').length;
+          // Buscar contenedores repetidos que podrían ser proposals
+          const repeatingDivs = {};
+          document.querySelectorAll('div[class]').forEach(d => {
+            const cls = d.className.split(' ').sort().join(' ');
+            if (cls.length > 5 && cls.length < 100) {
+              repeatingDivs[cls] = (repeatingDivs[cls] || 0) + 1;
+            }
+          });
+          // Top 5 clases más repetidas (>= 3 repeticiones)
+          const topClasses = Object.entries(repeatingDivs)
+            .filter(([_, count]) => count >= 3)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([cls, count]) => `${cls} (x${count})`);
+
+          return {
+            textLength: text.length,
+            textSample: text.substring(0, 2000),
+            tsCount,
+            jobLinks,
+            vueComponents,
+            topClasses,
+            htmlLength: html.length,
+          };
+        }).catch(e => ({ error: e.message }));
+
+        console.log(`[Scraper] DEBUG p.${p}: textLen=${debugInfo.textLength}, timestamps=${debugInfo.tsCount}, jobLinks=${debugInfo.jobLinks}, vue=${debugInfo.vueComponents}`);
+        console.log(`[Scraper] DEBUG classes: ${JSON.stringify(debugInfo.topClasses || [])}`);
+        if (debugInfo.tsCount === 0) {
+          console.log(`[Scraper] DEBUG textSample: ${(debugInfo.textSample || '').substring(0, 800)}`);
+        }
+        console.log(`[Scraper] DEBUG apiIntercepted: ${apiData.length} respuestas JSON`);
+
+        // Estrategia 1: Extraer URLs de respuestas API interceptadas
         let apiProposals = [];
         for (const resp of apiData) {
           try {
             const json = JSON.parse(resp.data);
             const extracted = this._extractProposalsFromApiData(json);
             if (extracted.length > 0) {
-              console.log(`[Scraper] API interceptada: ${extracted.length} propuestas de ${resp.url}`);
+              console.log(`[Scraper] API: ${extracted.length} propuestas de ${resp.url}`);
               apiProposals.push(...extracted);
             }
-          } catch (_) { /* no era JSON parseable */ }
+          } catch (_) {}
         }
 
-        // Estrategia 2: Extraer links <a href="/job/..."> del DOM (por si Workana los mantiene)
-        let domProposals = await page.evaluate(() => {
-          const items = [];
-          const seen = new Set();
-          const links = document.querySelectorAll('a[href*="/job/"]');
-          links.forEach(link => {
-            const href = (link.href || '').split('?')[0];
-            if (seen.has(href) || !href.includes('/job/')) return;
-            seen.add(href);
-            const container = link.closest('tr, div[class], li, article, section');
-            items.push({
-              project_url: href,
-              project_title: link.textContent?.trim() || '',
-              container_text: container?.textContent?.trim().substring(0, 500) || '',
-            });
-          });
-          return items;
-        });
-
-        // Estrategia 3: Extraer del texto visible del MFE (último recurso)
-        // El MFE renderiza los títulos como texto plano sin links <a href="/job/...">
-        let textProposals = [];
-        if (apiProposals.length === 0 && domProposals.length === 0) {
-          console.log('[Scraper] Links /job/ no encontrados, extrayendo del texto visible del MFE');
-          textProposals = await page.evaluate(() => {
-            const bodyText = document.body.innerText || '';
+        // Estrategia 2: Links <a href="/job/..."> del DOM
+        let domProposals = [];
+        try {
+          domProposals = await page.evaluate(() => {
             const items = [];
-
-            // Patrón: Cada propuesta tiene texto descriptivo + "Hace X horas/días" + título
-            // Buscar bloques entre timestamps
-            const lines = bodyText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-
-            let currentBlock = [];
-            for (const line of lines) {
-              currentBlock.push(line);
-
-              // Cuando encontramos un timestamp, procesamos el bloque
-              if (/Hace \d+ (hora|horas|día|días|minuto|minutos|mes|meses|semana|semanas)/i.test(line) ||
-                  /\d+ (hour|hours|day|days|minute|minutes|month|months|week|weeks) ago/i.test(line)) {
-
-                const blockText = currentBlock.join(' ');
-
-                // Buscar título del proyecto (suele ser la línea más larga con mayúsculas iniciales)
-                // Patrones: "En <Título>" o "El proyecto <Título>"
-                let title = '';
-                const enMatch = blockText.match(/(?:En|In)\s+([A-ZÁÉÍÓÚÑ][^.!?]{15,120})/);
-                const elMatch = blockText.match(/El proyecto\s+([A-ZÁÉÍÓÚÑ][^.!?]{15,120})/);
-                if (enMatch) title = enMatch[1].trim();
-                else if (elMatch) title = elMatch[1].trim();
-                else {
-                  // Fallback: buscar la línea más larga que parezca un título
-                  const candidateLines = currentBlock.filter(l =>
-                    l.length > 20 && l.length < 150 &&
-                    /^[A-ZÁÉÍÓÚÑ]/.test(l) &&
-                    !l.includes('¡') && !l.includes('devolvimos')
-                  );
-                  if (candidateLines.length > 0) {
-                    title = candidateLines[candidateLines.length - 1];
-                  }
-                }
-
-                if (title) {
-                  // Limpiar título (quitar timestamps y basura al final)
-                  title = title.replace(/Hace \d+.*$/, '').replace(/\d+ (hour|day).*$/i, '').trim();
-
-                  items.push({
-                    project_url: '', // Sin URL, matchear por título en Supabase
-                    project_title: title,
-                    container_text: blockText.substring(0, 500),
-                  });
-                }
-
-                currentBlock = [];
-              }
-
-              // Limitar bloques para no acumular demasiado
-              if (currentBlock.length > 20) currentBlock = currentBlock.slice(-10);
-            }
-
+            const seen = new Set();
+            document.querySelectorAll('a[href*="/job/"]').forEach(link => {
+              const href = (link.href || '').split('?')[0];
+              if (seen.has(href) || !href.includes('/job/')) return;
+              seen.add(href);
+              const container = link.closest('tr, div[class], li, article, section');
+              items.push({
+                project_url: href,
+                project_title: link.textContent?.trim() || '',
+                container_text: container?.textContent?.trim().substring(0, 500) || '',
+              });
+            });
             return items;
           });
-          console.log(`[Scraper] Texto visible: ${textProposals.length} propuestas extraídas`);
+        } catch (e) {
+          console.log(`[Scraper] Estrategia 2 (DOM) error: ${e.message}`);
         }
 
-        // Combinar resultados (prioridad: API > DOM > texto)
+        // Estrategia 3: Extraer del texto visible usando timestamps como separadores
+        let textProposals = [];
+        if (apiProposals.length === 0 && domProposals.length === 0) {
+          console.log('[Scraper] Estrategia 3: extrayendo del texto visible');
+          try {
+            textProposals = await page.evaluate(() => {
+              const bodyText = document.body.innerText || '';
+              const items = [];
+
+              // Encontrar TODOS los timestamps y sus posiciones
+              const tsRegex = /Hace \d+ (?:hora|horas|día|días|minuto|minutos|mes|meses|semana|semanas)|(?:\d+ (?:hour|hours|day|days|minute|minutes|month|months|week|weeks) ago)/gi;
+              const timestamps = [];
+              let match;
+              while ((match = tsRegex.exec(bodyText)) !== null) {
+                timestamps.push({ index: match.index, text: match[0] });
+              }
+
+              if (timestamps.length === 0) return items;
+
+              // Cada bloque ANTES de un timestamp contiene los datos de una propuesta
+              for (let i = 0; i < timestamps.length; i++) {
+                const blockEnd = timestamps[i].index;
+                const blockStart = i === 0 ? 0 : timestamps[i - 1].index + timestamps[i - 1].text.length;
+                const block = bodyText.substring(blockStart, blockEnd).trim();
+
+                if (block.length < 20) continue;
+
+                // Extraer título: buscar la línea más larga que parezca un nombre de proyecto
+                const lines = block.split(/[\n\r]+/).map(l => l.trim()).filter(l => l.length > 0);
+
+                // Candidatos de título: líneas > 15 chars que no son UI/nav
+                const uiWords = ['propuesta', 'presupuesto', 'buscar', 'filtrar', 'mis propuestas',
+                  'workana', 'inicio', 'menu', 'navegación', 'cerrar', 'aceptar', 'cookies',
+                  'notificaciones', 'perfil', 'salir', 'ver más', 'mostrar', 'ocultar'];
+                const candidates = lines.filter(l => {
+                  if (l.length < 15 || l.length > 200) return false;
+                  const lower = l.toLowerCase();
+                  // Descartar líneas de UI
+                  if (uiWords.some(w => lower === w || lower.startsWith(w + ' '))) return false;
+                  // Descartar líneas que son solo números o moneda
+                  if (/^[\d$€USD\s.,]+$/.test(l)) return false;
+                  return true;
+                });
+
+                if (candidates.length > 0) {
+                  // El título suele ser la línea más larga
+                  const title = candidates.sort((a, b) => b.length - a.length)[0];
+                  items.push({
+                    project_url: '',
+                    project_title: title,
+                    container_text: block.substring(0, 500),
+                  });
+                }
+              }
+
+              return items;
+            });
+            console.log(`[Scraper] Texto visible: ${textProposals.length} propuestas extraídas`);
+          } catch (e) {
+            console.log(`[Scraper] Estrategia 3 (texto) error: ${e.message}`);
+          }
+        }
+
+        // Estrategia 4: Buscar contenedores MFE repetidos (Vue components)
+        let mfeProposals = [];
+        if (apiProposals.length === 0 && domProposals.length === 0 && textProposals.length === 0) {
+          console.log('[Scraper] Estrategia 4: buscando contenedores MFE repetidos');
+          try {
+            mfeProposals = await page.evaluate(() => {
+              const items = [];
+              // Buscar divs con data-v-* (Vue components) que se repitan
+              const allDivs = document.querySelectorAll('div[class]');
+              const classCounts = {};
+              allDivs.forEach(d => {
+                const cls = d.className;
+                if (cls && cls.length > 5) {
+                  classCounts[cls] = (classCounts[cls] || 0) + 1;
+                }
+              });
+
+              // Encontrar la clase que más se repite (>= 3 veces) — probablemente son los items de propuestas
+              const topClass = Object.entries(classCounts)
+                .filter(([_, count]) => count >= 3 && count <= 50)
+                .sort((a, b) => b[1] - a[1])[0];
+
+              if (!topClass) return items;
+
+              const containers = document.querySelectorAll(`div.${topClass[0].split(' ')[0]}`);
+              containers.forEach(container => {
+                const text = container.innerText || '';
+                if (text.length < 30) return;
+
+                // Buscar título dentro del contenedor
+                const lines = text.split(/[\n\r]+/).map(l => l.trim()).filter(l => l.length > 15 && l.length < 200);
+                const title = lines.length > 0 ? lines.sort((a, b) => b.length - a.length)[0] : '';
+
+                // Buscar URL si existe
+                const link = container.querySelector('a[href*="/job/"]');
+                const url = link ? (link.href || '').split('?')[0] : '';
+
+                if (title) {
+                  items.push({
+                    project_url: url,
+                    project_title: title,
+                    container_text: text.substring(0, 500),
+                  });
+                }
+              });
+
+              return items;
+            });
+            console.log(`[Scraper] MFE containers: ${mfeProposals.length} propuestas extraídas`);
+          } catch (e) {
+            console.log(`[Scraper] Estrategia 4 (MFE) error: ${e.message}`);
+          }
+        }
+
+        // Combinar resultados (prioridad: API > DOM > texto > MFE)
         let proposals = apiProposals.length > 0 ? apiProposals
           : domProposals.length > 0 ? domProposals
-          : textProposals;
+          : textProposals.length > 0 ? textProposals
+          : mfeProposals;
 
-        // Deduplicar por título (para evitar duplicados entre estrategias)
+        // Deduplicar
         const seen = new Set();
         proposals = proposals.filter(pr => {
-          const key = (pr.project_url || pr.project_title).toLowerCase();
-          if (seen.has(key)) return false;
+          const key = (pr.project_url || pr.project_title || '').toLowerCase();
+          if (!key || seen.has(key)) return false;
           seen.add(key);
           return true;
         });
@@ -467,14 +567,18 @@ class WorkanaScraper {
         });
 
         allProposals.push(...classified);
-        console.log(`[Scraper] Página ${p}: ${classified.length} propuestas (API=${apiProposals.length}, DOM=${domProposals.length}, text=${textProposals.length})`);
+        console.log(`[Scraper] Página ${p}: ${classified.length} propuestas (API=${apiProposals.length}, DOM=${domProposals.length}, text=${textProposals.length}, MFE=${mfeProposals.length})`);
 
-        // Si hay menos de 5, probablemente es la última página
-        if (proposals.length < 5) break;
+        // Si hay menos de 3, probablemente es la última página
+        if (proposals.length < 3) {
+          if (p === pageNum) console.log('[Scraper] Primera página sin propuestas — verificar estructura de página');
+          break;
+        }
 
         await this.bm.randomDelay(3000, 5000);
       } catch (error) {
-        console.error(`[Scraper] Error mis propuestas p.${p}: ${error.message}`);
+        // IMPORTANTE: usar console.log, no console.error (Easypanel puede no mostrar stderr)
+        console.log(`[Scraper] ERROR mis propuestas p.${p}: ${error.message}`);
         break;
       } finally {
         await page.close();

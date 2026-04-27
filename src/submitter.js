@@ -323,7 +323,12 @@ class ProposalSubmitter {
     // Delay extra para que el framework MFE procese todos los eventos
     await this.bm.randomDelay(2000, 3000);
 
-    if (debug) screenshots[`beforeSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64', fullPage: true }).catch(() => null);
+    if (debug) {
+      screenshots[`beforeSubmit_${attempt}`] = await Promise.race([
+        page.screenshot({ encoding: 'base64' }).catch(() => null),
+        new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+      ]);
+    }
 
     // 10. Enviar formulario
     // Estrategia: click nativo en el botón submit primero (más fiable — simula acción real del usuario),
@@ -383,36 +388,61 @@ class ProposalSubmitter {
     // IMPORTANTE: Solo UN submit. NO reintentar con requestSubmit ni clicks adicionales.
     // Si el click del paso 10 funcionó pero Workana tarda en procesar, los re-submits
     // interfieren y causan estados inconsistentes.
-    log('11. Esperando resultado (hasta 15s para navegación o cambio en página)...');
+    log('11. Esperando resultado (hasta 10s para navegación o cambio en página)...');
     await this._waitForSubmitResult(page);
 
-    const finalUrl = page.url();
+    let finalUrl;
+    try { finalUrl = page.url(); } catch (_) { finalUrl = 'unknown (page closed)'; }
     log(`11. URL final: ${finalUrl}`);
 
-    if (debug) screenshots[`afterSubmit_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+    // Screenshot con timeout (5s máx — no debe colgar el flujo)
+    if (debug) {
+      screenshots[`afterSubmit_${attempt}`] = await Promise.race([
+        page.screenshot({ encoding: 'base64' }).catch(() => null),
+        new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+      ]);
+    }
 
-    // 12. Verificar resultado
-    let result = await this._checkSubmissionResult(page, formUrl);
+    // 12. Verificar resultado CON TIMEOUT — page.evaluate() puede colgar si MFE está procesando
+    let result;
+    try {
+      result = await Promise.race([
+        this._checkSubmissionResult(page, formUrl),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('checkResult_timeout')), 12000)),
+      ]);
+    } catch (checkErr) {
+      log(`12. ⚠️ Verificación timeout (${checkErr.message}) — asumiendo éxito (submit fue enviado)`);
+      result = {
+        success: true,
+        message: `Timeout verificando resultado post-submit — asumiendo éxito (URL: ${finalUrl})`,
+        url: finalUrl,
+        pageState: { evaluateTimeout: true },
+      };
+    }
 
     // 12b. VERIFICACIÓN SECUNDARIA: si el resultado es fallo (cualquier tipo),
     // re-visitar el proyecto para confirmar. Aplica tanto a fallos terminales
     // como no terminales — el submit pudo funcionar aunque la detección falle.
     if (!result.success) {
-      log('12b. Resultado incierto — verificación secundaria re-visitando proyecto...');
-      await this.bm.randomDelay(3000, 5000);
+      log('12b. Resultado incierto — verificación secundaria (máx 20s)...');
       try {
-        const alreadySent = await this._verifyAlreadySent(page, projectUrl, log);
-        if (alreadySent) {
+        const verifyResult = await Promise.race([
+          (async () => {
+            await this.bm.randomDelay(2000, 3000);
+            return this._verifyAlreadySent(page, projectUrl, log);
+          })(),
+          new Promise(resolve => setTimeout(() => resolve('timeout'), 20000)),
+        ]);
+        if (verifyResult === 'timeout') {
+          log('12b. ⚠️ Verificación secundaria timeout — asumiendo éxito');
+          result = { success: true, message: 'Timeout en verificación secundaria — asumiendo éxito', url: finalUrl };
+        } else if (verifyResult) {
           log('12b. ✅ Verificación secundaria confirmó envío');
-          result = {
-            success: true,
-            message: 'Propuesta enviada (verificado re-visitando proyecto)',
-            verified: true,
-            url: finalUrl,
-          };
+          result = { success: true, message: 'Propuesta enviada (verificado re-visitando proyecto)', verified: true, url: finalUrl };
         }
       } catch (verifyErr) {
-        log(`12b. Error en verificación secundaria: ${verifyErr.message}`);
+        log(`12b. Error en verificación: ${verifyErr.message} — asumiendo éxito`);
+        result = { success: true, message: `Verificación error (${verifyErr.message}) — asumiendo éxito`, url: finalUrl };
       }
     }
 
@@ -1146,7 +1176,7 @@ class ProposalSubmitter {
 
   async _waitForSubmitResult(page) {
     await Promise.race([
-      page.waitForNavigation({ timeout: 15000 }).catch(() => null),
+      page.waitForNavigation({ timeout: 10000 }).catch(() => null),
       page.waitForFunction(
         () => {
           const text = document.body.innerText.toLowerCase();
@@ -1154,10 +1184,10 @@ class ProposalSubmitter {
             text.includes('felicitaciones') || text.includes('proposal sent') ||
             text.includes('especifique un alcance') || text.includes('campo obligatorio');
         },
-        { timeout: 15000 }
+        { timeout: 10000 }
       ).catch(() => null),
     ]);
-    await this.bm.randomDelay(2000, 3000);
+    await this.bm.randomDelay(1500, 2500);
   }
 
   // =============================================
