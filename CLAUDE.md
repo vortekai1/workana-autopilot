@@ -341,12 +341,33 @@ Ver **[INCIDENTS.md](INCIDENTS.md)** para el historial completo de incidencias c
 curl -s POST /clear-cookies → POST /login → GET /session-check
 ```
 
+**Script de validación end-to-end** (`test-sistema.sh`):
+```bash
+bash test-sistema.sh
+```
+Verifica:
+1. Browser corriendo
+2. Sesión activa (login funciona, URL válida incluye 'workana.com' y HTTPS)
+3. Scraping funciona (al menos 1 proyecto)
+4. Propuestas pendientes en Supabase
+
+**USAR DESPUÉS DE**:
+- Cada rebuild de Easypanel
+- Cuando recibas solo errores en WhatsApp por más de 1 día
+- Antes de tocar configuración del workflow n8n
+- Después de cualquier fix en `browser.js`, `scraper.js` o `submitter.js`
+
+**Señales de alerta crítica** (ejecutar validación inmediatamente):
+- Solo recibes `🤖❌ ERROR EN ENVÍO AUTO` en WhatsApp por >24h
+- Proyectos con `status=proposal_generated` y `auto_sent=true` acumulándose sin cambiar a `sent`
+- Login retorna `success: true` pero URL no incluye 'workana.com'
+
 ## Notas de Desarrollo
 
 - Workana usa **MFE** — todo el contenido se renderiza con JS post-load. Usar `waitForFunction` antes de interactuar.
 - El botón submit de Workana es `input[type="submit"]` con `value="Enviar presupuesto"`, NO un `<button>`.
 - Los selectores CSS del scraper usan múltiples fallbacks por si Workana cambia su HTML.
-- Usar `/screenshot`, `/debug-html` o `/debug-form` para debugging.
+- **Debugging: NUNCA usar `/screenshot` + Read para ver imágenes** — cuando el browser está en estado roto (chrome-error://, sesión inválida, página vacía), el PNG generado es corrupto y la herramienta Read falla con `Could not process image`. Usar SIEMPRE endpoints de texto: `/debug-html`, `/health`, `/session-check`, `/debug-form`. Son más fiables y no dependen del estado visual del browser.
 - El volumen `chrome-data` mantiene la sesión entre reinicios.
 - **No usar nodos nativos de Supabase en n8n** — causan fallos silenciosos, usar HTTP Request.
 - **No usar Set node typeVersion 3.4** — incompatible con n8n 2.12.3, usar Code node.
@@ -362,3 +383,8 @@ curl -s POST /clear-cookies → POST /login → GET /session-check
 - **Feedback URL encoding**: NUNCA usar `encodeURIComponent()` en URLs de query a Supabase PostgREST — busca el string literal codificado en vez del original. El PATCH usa la URL cruda: `?workana_url=eq.{{ $json.project_url }}`.
 - **_verifyFormState fallback**: Lee `textarea.value || textarea.textContent || textarea.innerText` para cubrir edge cases donde `.value` no refleja el contenido tras `execCommand('insertText')`.
 - **_launchBrowser race condition**: `_launchPromise` NO se nullea en `finally` — solo en `catch` (error) y en el handler `disconnected`. Esto previene que un segundo caller lance otro browser mientras el primero arranca.
+- **_ensureBrowser re-launch**: Si browser.connected es false, nullea _launchPromise para forzar re-lanzamiento.
+- **Task scopes abort**: Si TODOS los task scopes estan vacios (taskScopesFilled === 0), el submitter aborta — Workana rechaza formularios con scopes obligatorios sin rellenar.
+- **Scraper parseNum mejorado**: Regex \x5b\\d,.\x5d+ con replace para parsear numeros con separadores de miles.
+- **Retry workflow PATCH**: PATCH Proyecto Sent usa workana_url=eq.projectUrl (no id=eq.projectId), porque retry_queue no tiene project_id.
+- **CRÍTICO — Validación de login (INC-008)**: El método `login()` en `browser.js` DEBE validar que `page.url()` incluye 'workana.com' Y empieza con 'https://'. NUNCA asumir que "no está en /login = login exitoso". Cuando el browser está corrupto (redirect loop), puede retornar URLs como `chrome-error://chromewebdata/` que no incluyen '/login', causando falsos positivos de login exitoso y loops infinitos. Ver [browser.js:258-273](src/browser.js#L258-L273) para implementación correcta.

@@ -15,6 +15,7 @@
 | `🤖❌ ERROR EN ENVÍO AUTO` pero propuesta SÍ enviada | [INC-006](#inc-006) | Detección de éxito demasiado conservadora |
 | Propuestas duplicadas en Workana | [INC-006](#inc-006), [INC-007](#inc-007) | Submitter: MAX_SUBMIT_ATTEMPTS=1. n8n: retryOnFail=false |
 | Login falla tras rebuild (URL sigue en `/login`) | [INC-005](#inc-005) | Cookie banner bloquea submit → rebuild con fix |
+| Solo errores en WhatsApp, 0 propuestas enviadas por días | [INC-008](#inc-008) | Bug login acepta URLs corruptas → fix en browser.js:258 |
 
 ---
 
@@ -210,6 +211,112 @@ curl -s "https://workana-auto-pilot.ioefpm.easypanel.host/debug-form?url=URL_DE_
 
 ---
 
+## INC-008: Login acepta URLs corruptas — loop infinito de fallos
+**Fecha**: 2026-04-27
+**Severidad**: Crítica (sistema completamente parado durante 12 días)
+**Síntoma**: WhatsApp solo envía mensajes de `🤖❌ ERROR EN ENVÍO AUTO`. Cero propuestas enviadas desde el 15 de abril. Base de datos muestra 20 proyectos con `status=proposal_generated` y `auto_sent=true` pero ninguno cambia a `status=sent`.
+**Causa raíz**: Bug en `browser.js:258` — método `login()` acepta URLs corruptas como válidas:
+
+```javascript
+// ANTES (BUG):
+if (!page.url().includes('/login')) {
+  this.loggedIn = true;
+  return { success: true, message: 'Ya estás logueado (sesión previa)' };
+}
+```
+
+Cuando el browser está en redirect loop, `page.url()` retorna `chrome-error://chromewebdata/`. Como NO incluye `/login`, el código marca como logueado exitosamente.
+
+**Cascada de fallos**:
+1. Redirect loop (15/abril) → cookies corruptas → browser retorna `chrome-error://` en navegaciones
+2. `login()` retorna `{ success: true, url: 'chrome-error://chromewebdata/' }`
+3. Workflow n8n cree que login funcionó (porque `success=true`)
+4. Workflow continúa: scraping funciona, IA genera propuestas
+5. Intenta enviar propuesta → falla (sesión realmente caída, browser corrupto)
+6. `submitResult.success = false`
+7. Nodo "Actualizar Estado" deja proyecto en `status=proposal_generated` (no cambia a `sent`)
+8. Nodo "Resultado Auto" solo hace `console.log` del error (NO mete en retry_queue)
+9. WhatsApp notifica error
+10. Workflow termina
+11. **Siguiente ejecución: mismo ciclo infinito** (cada 30 min durante 12 días)
+
+**Impacto medido**:
+- **Duración**: 12 días (15 abril → 27 abril)
+- **Propuestas perdidas**: 20 proyectos con score ≥85 no enviados
+- **Scraping funcionando**: 20 proyectos detectados correctamente
+- **IA funcionando**: 20 propuestas generadas correctamente
+- **Solo falla envío**: sesión corrupta 100% del tiempo
+
+**Diagnóstico aplicado**:
+```bash
+# 1. Health check — browser corriendo pero loggedIn flag incorrecto
+curl https://workana-auto-pilot.ioefpm.easypanel.host/health
+# {"browser":true,"loggedIn":true,...}  ← flag en memoria (stale)
+
+# 2. Session check — redirect loop detectado
+curl https://workana-auto-pilot.ioefpm.easypanel.host/session-check
+# {"loggedIn":false,"url":"cookies cleared (redirect loop)"}
+
+# 3. Login manual — retorna success con URL corrupta
+curl -X POST https://workana-auto-pilot.ioefpm.easypanel.host/login
+# {"success":true,"message":"Login exitoso (...)","url":"chrome-error://chromewebdata/"}
+# ↑ BUG: success=true pero URL inválida
+
+# 4. Verificar propuestas pendientes en Supabase
+curl "https://zcmqcosuvjndgcwylzna.supabase.co/rest/v1/workana_projects?select=id,created_at&status=eq.proposal_generated&auto_sent=eq.true&order=created_at.desc" -H "apikey: SERVICE_KEY"
+# → 20 proyectos desde 24/abril con status=proposal_generated
+```
+
+**Solución aplicada**:
+1. **Fix en `browser.js:258`** — validación estricta de URL:
+```javascript
+// DESPUÉS (FIX):
+const currentUrl = page.url();
+if (!currentUrl.includes('/login') && currentUrl.includes('workana.com') && currentUrl.startsWith('https://')) {
+  this.loggedIn = true;
+  return { success: true, message: 'Ya estás logueado (sesión previa)', url: currentUrl };
+}
+
+// Si la URL no es de Workana, es un redirect loop o error del browser
+if (!currentUrl.includes('workana.com') || !currentUrl.startsWith('https://')) {
+  console.error(`[Browser] Login navegó a URL inválida: ${currentUrl}`);
+  return {
+    success: false,
+    message: `Login falló — browser en estado corrupto. URL: ${currentUrl}`,
+    url: currentUrl,
+  };
+}
+```
+
+2. **Rebuild del servicio** en Easypanel para limpiar estado corrupto del browser
+
+**Validación post-fix**:
+```bash
+# Script de validación end-to-end
+bash test-sistema.sh
+
+# Debe verificar:
+# 1. Browser corriendo
+# 2. Sesión activa (login funciona, URL válida)
+# 3. Scraping funciona (al menos 1 proyecto)
+# 4. Propuestas pendientes se procesarán gradualmente
+```
+
+**Prevención**:
+- Toda validación de login DEBE verificar que URL incluye dominio esperado ('workana.com') Y protocolo HTTPS
+- NUNCA asumir que ausencia de '/login' en URL = login exitoso
+- Siempre loguear URL completa en mensajes de error/éxito para facilitar debugging
+- Script `test-sistema.sh` ahora disponible para validación rápida post-rebuild
+
+**Archivos modificados**:
+- `src/browser.js` (login method, líneas 258-273)
+- `test-sistema.sh` (nuevo archivo de validación)
+- Commit: [cfeea49](https://github.com/vortekai1/workana-autopilot/commit/cfeea49)
+
+**Estado**: Resuelto. Esperando rebuild + validación con `test-sistema.sh`.
+
+---
+
 ## Lecciones Aprendidas
 
 1. **Express DEBE tener safety timeout**: Si enqueue/Puppeteer muere, Express debe garantizar respuesta HTTP. Sin esto, n8n espera hasta su propio timeout (600s) y el workflow se bloquea.
@@ -225,3 +332,9 @@ curl -s "https://workana-auto-pilot.ioefpm.easypanel.host/debug-form?url=URL_DE_
 6. **Timeouts deben ser configurables**: Hardcodear timeouts causa cascadas de fallos cuando las operaciones tardan más de lo esperado. Cada endpoint debe configurar su timeout según su operación.
 
 7. **Volumen `chrome-data` puede corromperse**: Las cookies persistentes pueden quedar en estado inconsistente tras rebuilds. CDP `Network.clearBrowserCookies` es la forma fiable de limpiar.
+
+8. **Validación de login debe verificar URL completa, no solo ausencia de '/login'**: Cuando el browser está corrupto, `page.url()` puede retornar `chrome-error://` u otras URLs inválidas. El código DEBE validar que la URL incluye el dominio esperado ('workana.com') Y usa protocolo HTTPS. Asumir que "no está en /login = login exitoso" causa loops infinitos cuando el browser está en estado corrupto.
+
+9. **Los flags booleanos en memoria (como `loggedIn`) pueden quedar stale**: El flag `this.loggedIn` puede decir `true` mientras la sesión real está caída. SIEMPRE verificar con navegación real (como hace `checkSession()`), no confiar solo en el flag. En caso de duda, priorizar evidencia de navegación sobre flags en memoria.
+
+10. **Propuestas con `auto_sent=true` pero `status!=sent` = señal de alerta**: Si hay proyectos con `status=proposal_generated` y `auto_sent=true` acumulándose por días, el sistema está intentando enviar pero fallando silenciosamente. Monitorear esta métrica como KPI de salud del sistema.
