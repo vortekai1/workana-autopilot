@@ -276,26 +276,6 @@
             "node": "GET Proyectos Hoy",
             "type": "main",
             "index": 0
-          },
-          {
-            "node": "GET Propuestas Hoy",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "GET Errores Hoy",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "GET Cuota Semanal",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "GET Retry Pendientes",
-            "type": "main",
-            "index": 0
           }
         ]
       ]
@@ -304,7 +284,7 @@
       "main": [
         [
           {
-            "node": "Construir Resumen",
+            "node": "GET Propuestas Hoy",
             "type": "main",
             "index": 0
           }
@@ -315,7 +295,7 @@
       "main": [
         [
           {
-            "node": "Construir Resumen",
+            "node": "GET Errores Hoy",
             "type": "main",
             "index": 0
           }
@@ -326,7 +306,7 @@
       "main": [
         [
           {
-            "node": "Construir Resumen",
+            "node": "GET Cuota Semanal",
             "type": "main",
             "index": 0
           }
@@ -337,7 +317,7 @@
       "main": [
         [
           {
-            "node": "Construir Resumen",
+            "node": "GET Retry Pendientes",
             "type": "main",
             "index": 0
           }

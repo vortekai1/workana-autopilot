@@ -182,11 +182,16 @@ class WorkanaScraper {
           '[class*="budget"]', '[class*="price"]'
         );
 
-        // Categoría
-        const category = getText(
-          '.category', '.project-category',
-          '[class*="category"]', 'nav [class*="breadcrumb"] a:last-child'
+        // Categoría — selectores específicos, evitar capturar GTM script
+        let category = getText(
+          '.project-category', 'nav .breadcrumb a:last-child',
+          'nav [class*="breadcrumb"] a:last-child',
+          '.category-name', '.project-category-name'
         );
+        // Validar: si parece corrupto (GTM script, HTML, >100 chars), descartar
+        if (category.length > 100 || category.includes('dataLayer') || category.includes('<script')) {
+          category = '';
+        }
 
         // Skills/Tags
         const skills = Array.from(

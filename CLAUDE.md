@@ -438,6 +438,58 @@ Verifica:
 **Errores normales (NO CRÍTICOS, ignorar si < 2h)**:
 - `Error de login: Execution context was destroyed` — ocurre cuando Workana redirige rápido. Auto-corrige en siguiente ejecución (30 min)
 
+## Acceso Programático (Claude Code → n8n / Easypanel)
+
+Claude Code puede interactuar **directamente** con n8n y Easypanel sin intervención manual:
+
+### n8n API (acceso completo)
+- **URL**: `https://n8n.vortekai.es/api/v1/`
+- **Auth**: Header `X-N8N-API-KEY` con key almacenada en `/config/workspace/proyectos-propios/claudecode-n8n/.env`
+- **Capacidades**: Listar/actualizar/ejecutar workflows, ver ejecuciones, activar/desactivar
+- **Workflows Workana** (IDs):
+  - `PS1Yw0GvOX5MnHtx` — Workana Autopilot v3 (principal, cada 30 min)
+  - `N4hrBHulEGUQchVD` — Workana Retry Queue (cada 15 min)
+  - `aKvMgB1ox27Fg8Kr` — Workana Feedback Loop (diario 9:00)
+  - `r7pleZBOm0cbXio5` — Workana Daily Summary (diario 22:00)
+
+**Ejemplo — actualizar workflow**:
+```bash
+N8N_KEY=$(grep N8N_API_KEY /config/workspace/proyectos-propios/claudecode-n8n/.env | cut -d= -f2)
+curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
+  -H "X-N8N-API-KEY: $N8N_KEY" -H "Content-Type: application/json" \
+  -d @n8n-workflow-feedback.json
+```
+
+### Easypanel API (acceso completo)
+- **URL**: `https://ioefpm.easypanel.host/api/trpc/`
+- **Auth**: Login con `auth.login` → Bearer token
+  ```bash
+  # Obtener token (guardar en variable, no en repo)
+  TOKEN=$(curl -s -X POST 'https://ioefpm.easypanel.host/api/trpc/auth.login' \
+    -H 'Content-Type: application/json' \
+    -d '{"json":{"email":"...","password":"..."}}' | node -e "console.log(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).result.data.json.token)")
+  # Usar con: -H "Authorization: Bearer $TOKEN"
+  ```
+- **Proyecto/Servicio**: `projectName: "workana"`, `serviceName: "auto-pilot"`
+- **Endpoints clave**:
+  - `services.app.deployService` — Trigger rebuild (POST, `{"json":{"projectName":"workana","serviceName":"auto-pilot"}}`)
+  - `services.app.restartService` — Restart contenedor (POST, mismo body)
+  - `services.app.inspectService` — Ver estado (GET, `?input={"json":{"projectName":"workana","serviceName":"auto-pilot"}}`)
+  - `projects.listProjects` — Listar proyectos (GET)
+  - `projects.inspectProject` — Detalle proyecto (GET, `?input={"json":{"projectName":"workana"}}`)
+- **Deploy webhook directo**: `http://156.67.26.118:3000/api/deploy/4e462ded0af97da9181955bf864eb172790ec843f281724b`
+- **Source**: GitHub `vortekai1/workana-autopilot` rama `main`, autoDeploy: false
+
+### Puppeteer Service API (acceso directo)
+- **URL**: `https://workana-auto-pilot.ioefpm.easypanel.host/`
+- **Sin auth** (todos los endpoints accesibles)
+- Usado para health checks, debugging, y verificación
+
+### Supabase REST API (acceso directo)
+- **URL**: `https://zcmqcosuvjndgcwylzna.supabase.co/rest/v1/`
+- **Auth**: Service Role Key en header `apikey` + `Authorization: Bearer`
+- Usado para consultas de estado, actualizaciones de proyectos, métricas
+
 ## Notas de Desarrollo
 
 - Workana usa **MFE** — todo el contenido se renderiza con JS post-load. Usar `waitForFunction` antes de interactuar.
@@ -464,3 +516,8 @@ Verifica:
 - **Scraper parseNum mejorado**: Regex \x5b\\d,.\x5d+ con replace para parsear numeros con separadores de miles.
 - **Retry workflow PATCH**: PATCH Proyecto Sent usa workana_url=eq.projectUrl (no id=eq.projectId), porque retry_queue no tiene project_id.
 - **CRÍTICO — Validación de login (INC-008)**: El método `login()` en `browser.js` DEBE validar que `page.url()` incluye 'workana.com' Y empieza con 'https://'. NUNCA asumir que "no está en /login = login exitoso". Cuando el browser está corrupto (redirect loop), puede retornar URLs como `chrome-error://chromewebdata/` que no incluyen '/login', causando falsos positivos de login exitoso y loops infinitos. Ver [browser.js:258-273](src/browser.js#L258-L273) para implementación correcta. IMPORTANTE: Usar `let` para `currentUrl` (línea 259) en vez de `const` — se reasigna en líneas 297 y 384. Redeclarar con `const` causa `SyntaxError` que impide arranque del servicio.
+- **Submit timeout protection (INC-009)**: `_checkSubmissionResult` y `_verifyAlreadySent` se envuelven en `Promise.race` con timeout de 12s y 20s respectivamente. Si `page.evaluate()` cuelga (MFE procesando post-submit) → asumir éxito. Screenshots con timeout de 5s.
+- **Categoría scraper**: El selector `[class*="category"]` captura el script GTM de Workana. Usar selectores específicos (`.project-category`, `.breadcrumb a:last-child`). Validar: si `category.length > 100` o contiene 'dataLayer' → descartar.
+- **Daily Summary — ejecución en serie**: Los 5 nodos HTTP GET deben encadenarse en SERIE (no paralelo). En n8n v1 execution order, nodos con múltiples inputs se ejecutan cuando llega el primero, no cuando llegan todos. Serial evita `"Node X hasn't been executed"`.
+- **workana_logs schema**: No tiene columna `level`. Columnas: `id`, `action`, `details` (jsonb), `success` (bool), `error_message`, `created_at`.
+- **Easypanel deploy**: El build con Nixpacks + Puppeteer/Chromium tarda 3-8 minutos. El servicio no responde durante el build (404/502). El deploy webhook (`/api/deploy/{token}`) es la forma más directa de triggear un rebuild.
