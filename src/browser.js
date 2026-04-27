@@ -255,9 +255,21 @@ class BrowserManager {
       await this.randomDelay(2000, 3000);
 
       // Ya logueado? (redirige al dashboard)
-      if (!page.url().includes('/login')) {
+      // IMPORTANTE: validar que la URL sea realmente de Workana, no chrome-error:// u otras
+      const currentUrl = page.url();
+      if (!currentUrl.includes('/login') && currentUrl.includes('workana.com') && currentUrl.startsWith('https://')) {
         this.loggedIn = true;
-        return { success: true, message: 'Ya estás logueado (sesión previa)' };
+        return { success: true, message: 'Ya estás logueado (sesión previa)', url: currentUrl };
+      }
+
+      // Si la URL no es de Workana, es un redirect loop o error del browser
+      if (!currentUrl.includes('workana.com') || !currentUrl.startsWith('https://')) {
+        console.error(`[Browser] Login navegó a URL inválida: ${currentUrl}`);
+        return {
+          success: false,
+          message: `Login falló — browser en estado corrupto. URL: ${currentUrl}`,
+          url: currentUrl,
+        };
       }
 
       // Cerrar banner de cookies ANTES de interactuar con el formulario
