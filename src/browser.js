@@ -256,7 +256,7 @@ class BrowserManager {
 
       // Ya logueado? (redirige al dashboard)
       // IMPORTANTE: validar que la URL sea realmente de Workana, no chrome-error:// u otras
-      const currentUrl = page.url();
+      let currentUrl = page.url();
       if (!currentUrl.includes('/login') && currentUrl.includes('workana.com') && currentUrl.startsWith('https://')) {
         this.loggedIn = true;
         return { success: true, message: 'Ya estás logueado (sesión previa)', url: currentUrl };
@@ -306,7 +306,7 @@ class BrowserManager {
       }
 
       if (!emailField) {
-        const currentUrl = page.url();
+        currentUrl = page.url(); // Reutilizar variable existente
         return {
           success: false,
           message: `No se encontró campo de email. URL actual: ${currentUrl}. Puede que Cloudflare esté bloqueando.`,
@@ -393,7 +393,7 @@ class BrowserManager {
       await this.randomDelay(2000, 3000);
 
       // Verificar login exitoso — URL debe ser de Workana (no chrome-error://)
-      const currentUrl = page.url();
+      currentUrl = page.url(); // Reutilizar variable existente
       this.loggedIn =
         currentUrl.includes('workana.com') &&
         !currentUrl.includes('/login') && !currentUrl.includes('/signin');
