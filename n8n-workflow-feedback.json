@@ -57,7 +57,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const config = $('CONFIG').first().json;\nconst data = $input.first().json;\n\nif (!data.success || !Array.isArray(data.proposals)) {\n  console.log('No se pudieron obtener propuestas:', data.error || 'unknown');\n  return [];\n}\n\nconst updates = [];\nfor (const p of data.proposals) {\n  if (!p.project_url) continue;\n\n  const body = {\n    client_responded: p.client_responded || false,\n  };\n\n  if (p.outcome && p.outcome !== 'in_progress') {\n    body.outcome = p.outcome;\n    if (p.outcome === 'won') body.status = 'won';\n    else if (p.outcome === 'lost') body.status = 'lost';\n  }\n\n  updates.push({\n    json: {\n      project_url: p.project_url,\n      patch_body: body,\n      SUPABASE_URL: config.SUPABASE_URL,\n      SUPABASE_KEY: config.SUPABASE_KEY,\n    }\n  });\n}\n\nconsole.log('Preparados ' + updates.length + ' updates de feedback');\nreturn updates;"
+        "jsCode": "const config = $('CONFIG').first().json;\nconst data = $input.first().json;\n\nif (!data.success || !Array.isArray(data.proposals)) {\n  console.log('No se pudieron obtener propuestas:', data.error || 'unknown');\n  return [];\n}\n\nconst updates = [];\nfor (const p of data.proposals) {\n  // Construir filtro de Supabase: por URL si existe, por título si no\n  let supabaseFilter = '';\n  if (p.project_url) {\n    supabaseFilter = 'workana_url=eq.' + p.project_url;\n  } else if (p.project_title && p.project_title.length > 15) {\n    // Match por título con ilike (case insensitive, parcial)\n    // Usar las primeras 50 chars del título para evitar problemas con caracteres especiales\n    const titleClean = p.project_title.substring(0, 50).replace(/%/g, '%25').replace(/&/g, '%26');\n    supabaseFilter = 'title=ilike.*' + encodeURIComponent(titleClean) + '*';\n  } else {\n    continue; // Sin URL ni título suficiente, skip\n  }\n\n  const body = {\n    client_responded: p.client_responded || false,\n  };\n\n  // Marcar como sent si estaba en proposal_generated (el hecho de que aparezca en /my-proposals = se envió)\n  body.status = 'sent';\n\n  if (p.outcome && p.outcome !== 'in_progress') {\n    body.outcome = p.outcome;\n    if (p.outcome === 'won') body.status = 'won';\n    else if (p.outcome === 'lost') body.status = 'lost';\n  }\n\n  updates.push({\n    json: {\n      supabase_filter: supabaseFilter,\n      patch_body: body,\n      match_by: p.project_url ? 'url' : 'title',\n      SUPABASE_URL: config.SUPABASE_URL,\n      SUPABASE_KEY: config.SUPABASE_KEY,\n    }\n  });\n}\n\nconsole.log('Preparados ' + updates.length + ' updates de feedback (url: ' + updates.filter(u => u.json.match_by === 'url').length + ', title: ' + updates.filter(u => u.json.match_by === 'title').length + ')');\nreturn updates;"
       },
       "id": "feedback-preparar",
       "name": "Preparar Updates",
@@ -71,7 +71,7 @@
     {
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_projects?workana_url=eq.{{ $json.project_url }}",
+        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_projects?{{ $json.supabase_filter }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

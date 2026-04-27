@@ -296,69 +296,181 @@ class WorkanaScraper {
         const url = `https://www.workana.com/worker/proposals?page=${p}`;
         console.log(`[Scraper] Navegando a mis propuestas: ${url}`);
 
+        // Interceptar respuestas API del MFE para capturar datos JSON con URLs de proyecto
+        const apiData = [];
+        page.on('response', async (response) => {
+          try {
+            const reqUrl = response.url();
+            // Capturar peticiones API que puedan contener datos de propuestas
+            if (reqUrl.includes('/api/') || reqUrl.includes('/graphql') ||
+                reqUrl.includes('bids') || reqUrl.includes('proposals') ||
+                reqUrl.includes('worker')) {
+              const contentType = response.headers()['content-type'] || '';
+              if (contentType.includes('json')) {
+                const text = await response.text();
+                if (text.includes('/job/') || text.includes('project')) {
+                  apiData.push({ url: reqUrl, data: text.substring(0, 50000) });
+                }
+              }
+            }
+          } catch (_) { /* respuestas que ya se consumieron */ }
+        });
+
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
         await this.bm.randomDelay(2000, 4000);
-        await this._gradualScroll(page);
 
-        const proposals = await page.evaluate(() => {
+        // Esperar a que el MFE renderice contenido (buscar timestamps como "Hace X horas")
+        await page.waitForFunction(
+          () => document.body.innerText.includes('Hace') || document.body.innerText.includes('ago'),
+          { timeout: 15000 }
+        ).catch(() => console.log('[Scraper] Timeout esperando render MFE en propuestas'));
+
+        await this._gradualScroll(page);
+        await this.bm.randomDelay(1000, 2000);
+
+        // Estrategia 1: Intentar extraer URLs de las respuestas API interceptadas
+        let apiProposals = [];
+        for (const resp of apiData) {
+          try {
+            const json = JSON.parse(resp.data);
+            const extracted = this._extractProposalsFromApiData(json);
+            if (extracted.length > 0) {
+              console.log(`[Scraper] API interceptada: ${extracted.length} propuestas de ${resp.url}`);
+              apiProposals.push(...extracted);
+            }
+          } catch (_) { /* no era JSON parseable */ }
+        }
+
+        // Estrategia 2: Extraer links <a href="/job/..."> del DOM (por si Workana los mantiene)
+        let domProposals = await page.evaluate(() => {
           const items = [];
           const seen = new Set();
-
           const links = document.querySelectorAll('a[href*="/job/"]');
-
           links.forEach(link => {
             const href = (link.href || '').split('?')[0];
             if (seen.has(href) || !href.includes('/job/')) return;
             seen.add(href);
-
             const container = link.closest('tr, div[class], li, article, section');
-            if (!container) return;
-
-            const statusEl = container.querySelector(
-              '[class*="status"], .badge, .label, [class*="state"]'
-            );
-
             items.push({
               project_url: href,
               project_title: link.textContent?.trim() || '',
-              status_text: statusEl?.textContent?.trim() || '',
-              container_text: container.textContent?.trim().substring(0, 500) || '',
+              container_text: container?.textContent?.trim().substring(0, 500) || '',
             });
           });
-
           return items;
+        });
+
+        // Estrategia 3: Extraer del texto visible del MFE (último recurso)
+        // El MFE renderiza los títulos como texto plano sin links <a href="/job/...">
+        let textProposals = [];
+        if (apiProposals.length === 0 && domProposals.length === 0) {
+          console.log('[Scraper] Links /job/ no encontrados, extrayendo del texto visible del MFE');
+          textProposals = await page.evaluate(() => {
+            const bodyText = document.body.innerText || '';
+            const items = [];
+
+            // Patrón: Cada propuesta tiene texto descriptivo + "Hace X horas/días" + título
+            // Buscar bloques entre timestamps
+            const lines = bodyText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+            let currentBlock = [];
+            for (const line of lines) {
+              currentBlock.push(line);
+
+              // Cuando encontramos un timestamp, procesamos el bloque
+              if (/Hace \d+ (hora|horas|día|días|minuto|minutos|mes|meses|semana|semanas)/i.test(line) ||
+                  /\d+ (hour|hours|day|days|minute|minutes|month|months|week|weeks) ago/i.test(line)) {
+
+                const blockText = currentBlock.join(' ');
+
+                // Buscar título del proyecto (suele ser la línea más larga con mayúsculas iniciales)
+                // Patrones: "En <Título>" o "El proyecto <Título>"
+                let title = '';
+                const enMatch = blockText.match(/(?:En|In)\s+([A-ZÁÉÍÓÚÑ][^.!?]{15,120})/);
+                const elMatch = blockText.match(/El proyecto\s+([A-ZÁÉÍÓÚÑ][^.!?]{15,120})/);
+                if (enMatch) title = enMatch[1].trim();
+                else if (elMatch) title = elMatch[1].trim();
+                else {
+                  // Fallback: buscar la línea más larga que parezca un título
+                  const candidateLines = currentBlock.filter(l =>
+                    l.length > 20 && l.length < 150 &&
+                    /^[A-ZÁÉÍÓÚÑ]/.test(l) &&
+                    !l.includes('¡') && !l.includes('devolvimos')
+                  );
+                  if (candidateLines.length > 0) {
+                    title = candidateLines[candidateLines.length - 1];
+                  }
+                }
+
+                if (title) {
+                  // Limpiar título (quitar timestamps y basura al final)
+                  title = title.replace(/Hace \d+.*$/, '').replace(/\d+ (hour|day).*$/i, '').trim();
+
+                  items.push({
+                    project_url: '', // Sin URL, matchear por título en Supabase
+                    project_title: title,
+                    container_text: blockText.substring(0, 500),
+                  });
+                }
+
+                currentBlock = [];
+              }
+
+              // Limitar bloques para no acumular demasiado
+              if (currentBlock.length > 20) currentBlock = currentBlock.slice(-10);
+            }
+
+            return items;
+          });
+          console.log(`[Scraper] Texto visible: ${textProposals.length} propuestas extraídas`);
+        }
+
+        // Combinar resultados (prioridad: API > DOM > texto)
+        let proposals = apiProposals.length > 0 ? apiProposals
+          : domProposals.length > 0 ? domProposals
+          : textProposals;
+
+        // Deduplicar por título (para evitar duplicados entre estrategias)
+        const seen = new Set();
+        proposals = proposals.filter(pr => {
+          const key = (pr.project_url || pr.project_title).toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
         });
 
         // Clasificar estados
         const classified = proposals.map(pr => {
-          const text = (pr.status_text + ' ' + pr.container_text).toLowerCase();
+          const text = ((pr.status_text || '') + ' ' + (pr.container_text || '')).toLowerCase();
           let outcome = 'in_progress';
           let clientResponded = false;
 
           if (/ganado|won|aceptad|accepted|contratad|hired/i.test(text)) {
             outcome = 'won';
             clientResponded = true;
-          } else if (/rechazad|rejected|perdid|lost|no seleccion|not selected/i.test(text)) {
+          } else if (/rechazad|rejected|perdid|lost|no seleccion|not selected|no fue aceptada/i.test(text)) {
             outcome = 'lost';
             clientResponded = true;
           } else if (/visto|seen|le[ií]d|read|respuesta|replied|message/i.test(text)) {
             clientResponded = true;
-          } else if (/cerrado|closed|expirad|expired|finaliz/i.test(text)) {
+          } else if (/cerrado|closed|expirad|expired|finaliz|devolvimos|no ha tenido actividad/i.test(text)) {
             outcome = 'no_response';
           }
 
           return {
-            project_url: pr.project_url,
-            project_title: pr.project_title,
+            project_url: pr.project_url || '',
+            project_title: pr.project_title || '',
             outcome,
             client_responded: clientResponded,
+            match_by: pr.project_url ? 'url' : 'title',
           };
         });
 
         allProposals.push(...classified);
+        console.log(`[Scraper] Página ${p}: ${classified.length} propuestas (API=${apiProposals.length}, DOM=${domProposals.length}, text=${textProposals.length})`);
 
-        // Si hay menos de 10, probablemente es la última página
-        if (proposals.length < 10) break;
+        // Si hay menos de 5, probablemente es la última página
+        if (proposals.length < 5) break;
 
         await this.bm.randomDelay(3000, 5000);
       } catch (error) {
@@ -371,6 +483,58 @@ class WorkanaScraper {
 
     console.log(`[Scraper] ${allProposals.length} propuestas encontradas (${maxPages} páginas)`);
     return { success: true, proposals: allProposals, total: allProposals.length };
+  }
+
+  // Extraer datos de propuestas de respuestas API interceptadas del MFE
+  _extractProposalsFromApiData(data) {
+    const proposals = [];
+
+    // Recursivamente buscar objetos que tengan URL de proyecto
+    const traverse = (obj) => {
+      if (!obj || typeof obj !== 'object') return;
+      if (Array.isArray(obj)) {
+        obj.forEach(item => traverse(item));
+        return;
+      }
+
+      // Buscar campos que contengan URLs de proyecto
+      const urlFields = ['url', 'project_url', 'projectUrl', 'href', 'link'];
+      const titleFields = ['title', 'project_title', 'projectTitle', 'name'];
+
+      let projectUrl = '';
+      let projectTitle = '';
+
+      for (const field of urlFields) {
+        if (obj[field] && typeof obj[field] === 'string' && obj[field].includes('/job/')) {
+          projectUrl = obj[field].split('?')[0];
+          if (!projectUrl.startsWith('http')) {
+            projectUrl = 'https://www.workana.com' + projectUrl;
+          }
+          break;
+        }
+      }
+
+      for (const field of titleFields) {
+        if (obj[field] && typeof obj[field] === 'string' && obj[field].length > 10) {
+          projectTitle = obj[field];
+          break;
+        }
+      }
+
+      if (projectUrl || (projectTitle && projectTitle.length > 15)) {
+        proposals.push({
+          project_url: projectUrl,
+          project_title: projectTitle,
+          container_text: JSON.stringify(obj).substring(0, 500),
+        });
+      }
+
+      // Buscar en sub-objetos
+      Object.values(obj).forEach(val => traverse(val));
+    };
+
+    traverse(data);
+    return proposals;
   }
 
   // Scroll gradual para activar lazy loading

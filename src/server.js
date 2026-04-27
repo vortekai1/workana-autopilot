@@ -318,8 +318,17 @@ app.post('/restart-browser', async (req, res) => {
     // Cerrar browser actual
     if (browserManager && browserManager.browser) {
       try {
-        await browserManager.browser.close();
+        // Obtener PID del proceso de Chrome antes de cerrar
+        const browserProcess = browserManager.browser.process();
+        const pid = browserProcess ? browserProcess.pid : null;
+
+        await browserManager.browser.close().catch(() => {});
         console.log('[Server] Browser cerrado');
+
+        // Si close() no mató el proceso, forzar kill
+        if (pid) {
+          try { process.kill(pid, 'SIGKILL'); } catch (_) {}
+        }
       } catch (e) {
         console.log(`[Server] Error cerrando browser: ${e.message}`);
       }
@@ -327,6 +336,19 @@ app.post('/restart-browser', async (req, res) => {
 
     // Esperar 3s para que el proceso limpie recursos
     await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Eliminar SingletonLock que Chrome deja si no se cerró limpiamente
+    const fs = require('fs');
+    const userDataDir = process.env.USER_DATA_DIR || './chrome-data';
+    const lockFile = require('path').join(userDataDir, 'SingletonLock');
+    try {
+      if (fs.existsSync(lockFile)) {
+        fs.unlinkSync(lockFile);
+        console.log('[Server] SingletonLock eliminado');
+      }
+    } catch (e) {
+      console.log(`[Server] No se pudo eliminar SingletonLock: ${e.message}`);
+    }
 
     // Forzar re-lanzamiento
     browserManager._launchPromise = null;
@@ -376,14 +398,32 @@ app.post('/force-clear-session', async (req, res) => {
     // Paso 2: Reiniciar browser
     if (browserManager && browserManager.browser) {
       try {
-        await browserManager.browser.close();
+        const browserProcess = browserManager.browser.process();
+        const pid = browserProcess ? browserProcess.pid : null;
+        await browserManager.browser.close().catch(() => {});
         console.log('[Server] Browser cerrado');
+        if (pid) {
+          try { process.kill(pid, 'SIGKILL'); } catch (_) {}
+        }
       } catch (e) {
         console.log(`[Server] Error cerrando browser: ${e.message}`);
       }
     }
 
     await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Eliminar SingletonLock
+    const fs = require('fs');
+    const userDataDir = process.env.USER_DATA_DIR || './chrome-data';
+    const lockFile = require('path').join(userDataDir, 'SingletonLock');
+    try {
+      if (fs.existsSync(lockFile)) {
+        fs.unlinkSync(lockFile);
+        console.log('[Server] SingletonLock eliminado');
+      }
+    } catch (e) {
+      console.log(`[Server] No se pudo eliminar SingletonLock: ${e.message}`);
+    }
 
     browserManager._launchPromise = null;
     browserManager.browser = null;
