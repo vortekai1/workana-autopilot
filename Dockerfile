@@ -1,5 +1,13 @@
 FROM node:20-slim
 
+# Build args que Easypanel inyecta automáticamente (necesarios para que buildx no falle)
+ARG WORKANA_EMAIL
+ARG WORKANA_PASSWORD
+ARG PORT
+ARG HEADLESS
+ARG USER_DATA_DIR
+ARG GIT_SHA
+
 # Dependencias de Chromium
 RUN apt-get update && apt-get install -y \
     chromium \
