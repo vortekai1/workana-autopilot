@@ -37,6 +37,20 @@ class BrowserManager {
           this.browser = null;
         }
 
+        // Eliminar SingletonLock antes de lanzar — queda stale si el contenedor anterior murió
+        if (this.userDataDir) {
+          const fs = require('fs');
+          const lockPath = require('path').join(this.userDataDir, 'SingletonLock');
+          try {
+            if (fs.existsSync(lockPath)) {
+              fs.unlinkSync(lockPath);
+              console.log('[Browser] SingletonLock eliminado (stale del contenedor anterior)');
+            }
+          } catch (lockErr) {
+            console.log('[Browser] No se pudo eliminar SingletonLock:', lockErr.message);
+          }
+        }
+
         this.browser = await puppeteer.launch({
           headless: this.headless ? 'new' : false,
           userDataDir: this.userDataDir,
