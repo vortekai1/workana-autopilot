@@ -234,7 +234,8 @@ Rechaza: diseño gráfico puro, traducción, contabilidad, presencia física, >5
 ### Workflows Auxiliares
 
 - **Resumen Diario** (`n8n-workflow-daily-summary.json`): 22:00 L-S, 10 nodos
-  - Flujo: Trigger → CONFIG → Calcular Fechas → 5x GET HTTP en paralelo (proyectos, propuestas, errores, cuota, retry) → Construir Resumen (Code puro) → WhatsApp
+  - Flujo: Trigger → CONFIG → Calcular Fechas → GET Proyectos → GET Propuestas → GET Errores → GET Cuota → GET Retry → Construir Resumen (Code puro) → WhatsApp
+  - **IMPORTANTE**: Los 5 GETs van en SERIE (no paralelo). n8n v1 ejecuta nodos con múltiples inputs al llegar el primero, no al llegar todos.
 - **Cola Reintentos** (`n8n-workflow-retry.json`): cada 15 min, 13 nodos
   - Flujo: Trigger → CONFIG → GET Pendientes → Preparar Items → PATCH Processing → Reintentar Envío → Evaluar Resultado → IF Éxito → (SÍ: PATCH Completed + PATCH Proyecto Sent / NO: IF Max → PATCH Failed o PATCH Backoff)
 - **Feedback Loop** (`n8n-workflow-feedback.json`): 9:00 L-S, 5 nodos
@@ -296,8 +297,16 @@ Workana usa **micro-frontends (MFE)** — el contenido se renderiza con JavaScri
 
 ### Puppeteer Service (Easypanel)
 - URL: `https://workana-auto-pilot.ioefpm.easypanel.host`
-- Build desde GitHub (rama `main`, repo privado)
-- Para redesplegar: `git push origin main` → Easypanel → Forzar reconstrucción
+- Build: **Dockerfile** (seleccionado manualmente en UI). Si aparece pantalla de "Compilación" sin opción seleccionada → `build: null` corrupto → seleccionar Dockerfile y guardar.
+- Source: GitHub `vortekai1/workana-autopilot` rama `main`, autoDeploy: false
+- Volumen: `chrome-data` en `/app/chrome-data` (cookies + sesión persistente)
+- Para redesplegar:
+  1. `git push origin main`
+  2. Easypanel UI → servicio `auto-pilot` → botón Deploy/Forzar reconstrucción
+  3. Esperar 3-8 min → verificar `GET /health`
+  4. Si login caído → el workflow n8n lo recupera automáticamente en ≤30 min
+- **NUNCA** usar Nixpacks como build type — no instala Chromium
+- El Dockerfile incluye `ARG` directives para las env vars que Easypanel inyecta como `--build-arg` (sin ellas, `docker buildx` falla con exit code 1)
 
 ### Variables de Entorno Docker
 ```env
@@ -480,8 +489,8 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
   - `services.app.updateDeploy` — Acepta calls pero `command` NO persiste
   - `projects.listProjects` — Listar proyectos (GET)
   - `projects.inspectProject` — Detalle proyecto (GET)
-- **URL alternativa**: `http://156.67.26.118:3000/api/trpc/` (IP directa, solo accesible desde misma red)
-- **Deploy webhook**: `POST http://156.67.26.118:3000/api/deploy/4e462ded0af97da9181955bf864eb172790ec843f281724b` (no funciona desde contenedores internos)
+- **URL alternativa (red interna)**: `http://156.67.26.118:3000/api/trpc/` — para usar con `jq` (no soporta `node -e`)
+- **Deploy webhook**: `POST http://156.67.26.118:3000/api/deploy/{token}` — NO funciona desde contenedores Docker internos (connection refused)
 - **Source**: GitHub `vortekai1/workana-autopilot` rama `main`, autoDeploy: false
 - **IMPORTANTE**: Campos clave de `inspectService`:
   - `build: null` → config de build corrupta, deploys fallarán
@@ -529,7 +538,7 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
 - **Categoría scraper**: El selector `[class*="category"]` captura el script GTM de Workana. Usar selectores específicos (`.project-category`, `.breadcrumb a:last-child`). Validar: si `category.length > 100` o contiene 'dataLayer' → descartar.
 - **Daily Summary — ejecución en serie**: Los 5 nodos HTTP GET deben encadenarse en SERIE (no paralelo). En n8n v1 execution order, nodos con múltiples inputs se ejecutan cuando llega el primero, no cuando llegan todos. Serial evita `"Node X hasn't been executed"`.
 - **workana_logs schema**: No tiene columna `level`. Columnas: `id`, `action`, `details` (jsonb), `success` (bool), `error_message`, `created_at`.
-- **Easypanel deploy**: El build con Nixpacks + Puppeteer/Chromium tarda 3-8 minutos. El servicio no responde durante el build (404/502). El deploy webhook (`/api/deploy/{token}`) es la forma más directa de triggear un rebuild.
+- **Easypanel deploy**: El build con Dockerfile + Chromium tarda 3-8 minutos. El servicio no responde durante el build (404/502). Siempre desplegar desde la UI de Easypanel (más fiable que la API). Si el build falla con exit code 1: verificar que el método de compilación está en "Dockerfile" (no en blanco/null).
 - **SingletonLock protection**: `server.js` elimina `SingletonLock` y `Lock` de `USER_DATA_DIR` ANTES de importar BrowserManager (líneas 4-16). Previene crash loop cuando el contenedor anterior dejó el lock en el volumen Docker.
 - **Dockerfile ARG directives**: Easypanel pasa env vars como `--build-arg` a `docker buildx build`. El Dockerfile DEBE declarar `ARG` para cada una (`WORKANA_EMAIL`, `WORKANA_PASSWORD`, `PORT`, `HEADLESS`, `USER_DATA_DIR`, `GIT_SHA`), o `buildx` puede fallar con exit code 1.
 - **Easypanel API — limitaciones descubiertas**:
@@ -539,3 +548,17 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
   - No hay endpoints para: build logs, Docker prune, exec/shell, volumen management
   - Si `build: null` en `inspectService` → config corrupta, necesita intervención desde UI
 - **Workaround SingletonLock sin rebuild**: Cambiar `USER_DATA_DIR` a `/tmp/chrome-data` via `updateEnv` + `restartService`. Evita el lock en el volumen pero cookies no persisten entre reinicios. Solución temporal hasta poder limpiar el volumen desde UI.
+
+## Guía Rápida de Problemas Comunes
+
+| Problema | Solución rápida | Tiempo |
+|----------|----------------|--------|
+| Sesión caída | `POST /force-clear-session` | 30s |
+| Redirect loop | `POST /clear-cookies` → `POST /login` | 30s |
+| SingletonLock crash loop | Easypanel UI → Volumes → Eliminar `chrome-data` → Deploy | 5min |
+| Build falla (exit code 1) | Easypanel UI → verificar que compilación = "Dockerfile" | 1min |
+| `build: null` en API | Easypanel UI → seleccionar "Dockerfile" → guardar → deploy | 5min |
+| Solo errores WhatsApp >24h | `bash test-sistema.sh` → si login falla → `POST /force-clear-session` | 2min |
+| Propuestas stuck proposal_generated | Verificar sesión → si OK, esperar feedback loop (9:00) | - |
+| Daily Summary falla | Verificar que GETs van en SERIE en n8n (no paralelo) | - |
+| Categorías con GTM script | Verificar scraper.js usa selectores específicos, no `[class*="category"]` | - |

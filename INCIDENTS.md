@@ -364,7 +364,13 @@ at /app/src/browser.js:396
 
 13. **SingletonLock en volúmenes Docker persiste entre reinicios de contenedor**: Chrome deja un archivo `SingletonLock` que impide arrancar otra instancia. Si el contenedor muere (rebuild/restart), el lock queda huérfano. Eliminarlo siempre al inicio del proceso Node.js (server.js) Y en el CMD del Dockerfile para cubrir todos los escenarios.
 
-14. **Easypanel `build: null` indica config de build corrupta**: Si `inspectService` muestra `build: null`, los calls a `updateBuild` y `deployService` fallarán silenciosamente o con exit code 1 genérico. Puede ser necesario recrear el servicio desde la UI.
+14. **Easypanel `build: null` indica config de build corrupta**: Si `inspectService` muestra `build: null`, los calls a `updateBuild` y `deployService` fallarán silenciosamente o con exit code 1 genérico. **Fix**: Ir a la UI de Easypanel → servicio → seleccionar "Dockerfile" como método de compilación → guardar. Esto restaura la config.
+
+15. **Dockerfile DEBE declarar ARG para build-args de Easypanel**: Easypanel inyecta TODAS las env vars como `--build-arg` a `docker buildx build`. Si el Dockerfile no tiene `ARG VARIABLE_NAME` para cada una, `buildx` puede fallar con exit code 1 sin explicación. Variables actuales: `WORKANA_EMAIL`, `WORKANA_PASSWORD`, `PORT`, `HEADLESS`, `USER_DATA_DIR`, `GIT_SHA`.
+
+16. **Easypanel API `updateEnv` es la ÚNICA operación de config que funciona de forma fiable**: `updateDeploy` (command), `updateBuild` (type) no persisten cambios. `updateEnv` SÍ persiste. Para cambios de build/deploy, usar siempre la UI.
+
+17. **Tras borrar volumen chrome-data, la sesión se pierde**: El workflow n8n detecta sesión caída, hace re-login, y continúa. No requiere intervención manual. Tiempo de recuperación: ≤30 min (siguiente ejecución del cron).
 
 ---
 
@@ -388,13 +394,24 @@ at /app/src/browser.js:396
 - SingletonLock SIEMPRE debe eliminarse al inicio del proceso Node.js (server.js), no solo en browser.js, para cubrir todos los escenarios.
 - Fix correcto aplicado: doble eliminación en `server.js` (antes de imports) + `Dockerfile` CMD (antes de node).
 
-**Fix final**: Commit `1760103` con eliminación de SingletonLock en `server.js` (líneas 4-16) y `Dockerfile` CMD.
+**Fix final** (multicapa):
+1. `server.js` (líneas 4-16): elimina `SingletonLock` y `Lock` de `USER_DATA_DIR` al arrancar, ANTES de importar BrowserManager
+2. `browser.js` (`_launchBrowser`): elimina `SingletonLock` antes de `puppeteer.launch()`
+3. `Dockerfile`: `ARG` directives para las env vars que Easypanel inyecta como `--build-arg` (sin ellas `docker buildx` falla)
+4. Easypanel UI: seleccionar "Dockerfile" como método de compilación (estaba en `build: null` = corrupto)
+5. Volumen `chrome-data` borrado desde Easypanel UI para eliminar lock huérfano
 
-**Estado**: Pendiente de deploy exitoso. El build de Docker sigue fallando en Easypanel.
+**Estado**: ✅ RESUELTO (27 abril 2026, ~23:25 UTC)
+- Health: OK, browser activo, sesión logueada
+- Session: `loggedIn: true`, URL en `workana.com/dashboard`
+- Scraping: 22 proyectos encontrados
+- `USER_DATA_DIR` restaurado a `/app/chrome-data`
 
 **Archivos modificados**:
 - `src/server.js` (eliminación de SingletonLock al inicio, líneas 4-16)
-- `Dockerfile` (CMD con `rm -f` antes de `node`)
+- `src/browser.js` (eliminación en `_launchBrowser`)
+- `Dockerfile` (ARG directives para build-args de Easypanel)
+- Commits: `4a87e41`, `1760103`, `0159c93`, `3a92bba`, `cee8579`
 
 **Diagnóstico**:
 ```bash
@@ -410,14 +427,19 @@ at /app/src/browser.js:396
 # Comparar con `git log --oneline -1` del repo local
 ```
 
-**Workaround que SÍ funcionó (sin rebuild)**:
-1. Cambiar `USER_DATA_DIR` de `/app/chrome-data` a `/tmp/chrome-data` via `services.app.updateEnv`
-2. `restartService` → el contenedor arranca usando directorio temporal SIN SingletonLock
-3. Servicio operativo (sesión activa, scraping OK) pero cookies NO persisten entre reinicios
+**Workaround temporal (sin rebuild, para emergencias)**:
+1. Cambiar `USER_DATA_DIR` a `/tmp/chrome-data` via Easypanel API `services.app.updateEnv`
+2. `restartService` → contenedor arranca sin SingletonLock pero cookies no persisten
+3. Restaurar `USER_DATA_DIR=/app/chrome-data` después de limpiar volumen
 
-**Acciones pendientes para deploy definitivo**:
-1. Borrar volumen `chrome-data` desde la UI de Easypanel (elimina SingletonLock)
-2. Verificar/limpiar espacio en disco del VPS (`docker system prune -af`)
-3. Restaurar `USER_DATA_DIR=/app/chrome-data` en env vars
-4. Forzar reconstrucción desde la UI de Easypanel (no vía API — `build: null` corrupto)
-5. Si `build: null` persiste → recrear el servicio manualmente
+**Resolución definitiva (aplicada)**:
+1. Borrar volumen `chrome-data` desde Easypanel UI → elimina SingletonLock
+2. Seleccionar "Dockerfile" como método de compilación (estaba en `build: null`)
+3. Desplegar desde UI → build exitoso con código nuevo (server.js + browser.js + ARGs)
+4. Restaurar `USER_DATA_DIR=/app/chrome-data` via API `updateEnv`
+5. Verificar health + session + scraping → todo OK
+
+**Prevención permanente**:
+- `server.js` elimina locks al inicio (antes de importar BrowserManager)
+- `browser.js` elimina locks antes de cada `puppeteer.launch()`
+- Doble protección garantiza que nunca vuelva a ocurrir crash loop por SingletonLock
