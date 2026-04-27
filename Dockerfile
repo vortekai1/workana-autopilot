@@ -29,4 +29,4 @@ RUN mkdir -p /app/chrome-data
 
 EXPOSE 3500
 
-CMD ["node", "src/server.js"]
+CMD ["sh", "-c", "rm -f /app/chrome-data/SingletonLock /app/chrome-data/Lock && node src/server.js"]

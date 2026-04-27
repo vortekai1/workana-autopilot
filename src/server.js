@@ -1,4 +1,22 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+
+// Eliminar SingletonLock ANTES de cualquier inicialización de Puppeteer
+// Previene crash loop cuando el contenedor anterior dejó el lock en el volumen
+const chromeDataDir = process.env.USER_DATA_DIR || './chrome-data';
+['SingletonLock', 'Lock'].forEach(lockFile => {
+  const lockPath = path.join(chromeDataDir, lockFile);
+  try {
+    if (fs.existsSync(lockPath)) {
+      fs.unlinkSync(lockPath);
+      console.log(`[Startup] ${lockFile} eliminado de ${chromeDataDir}`);
+    }
+  } catch (err) {
+    console.log(`[Startup] No se pudo eliminar ${lockFile}:`, err.message);
+  }
+});
+
 const { BrowserManager } = require('./browser');
 const { WorkanaScraper } = require('./scraper');
 const { ProposalSubmitter } = require('./submitter');
