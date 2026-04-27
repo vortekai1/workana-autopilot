@@ -16,6 +16,8 @@
 | Propuestas duplicadas en Workana | [INC-006](#inc-006), [INC-007](#inc-007) | Submitter: MAX_SUBMIT_ATTEMPTS=1. n8n: retryOnFail=false |
 | Login falla tras rebuild (URL sigue en `/login`) | [INC-005](#inc-005) | Cookie banner bloquea submit → rebuild con fix |
 | Solo errores en WhatsApp, 0 propuestas enviadas por días | [INC-008](#inc-008) | Bug login acepta URLs corruptas → fix en browser.js:258 |
+| Crash loop: `profile appears to be in use by another Chromium process` | [INC-009](#inc-009) | Eliminar SingletonLock del volumen chrome-data (o borrar volumen desde UI) |
+| Build de Easypanel falla con exit code 1 genérico | [INC-009](#inc-009) | Verificar `build: null` en inspectService → recrear servicio si config corrupta |
 
 ---
 
@@ -359,3 +361,63 @@ at /app/src/browser.js:396
 11. **Evitar redeclaración de variables en funciones largas**: En funciones de >100 líneas (como `login()`), usar `let` para variables que pueden necesitar reasignación múltiple. Si declaras con `const` al inicio y luego necesitas el mismo nombre en diferentes bloques, causarás `SyntaxError: Identifier 'X' has already been declared`. Mejor: declarar una vez con `let` y reutilizar, o usar nombres diferentes. En INC-008, `currentUrl` se declaró 3 veces con `const` → crash al arrancar servicio.
 
 12. **"Execution context was destroyed" en login es normal e intermitente**: Este error de Puppeteer ocurre cuando Workana redirige rápido del /login al /dashboard (si hay cookies válidas). El workflow n8n tiene retry automático cada 30 min, así que un fallo puntual se auto-corrige. Solo actuar si persiste >2 horas. El error NO indica problema grave, solo navegación rápida.
+
+13. **SingletonLock en volúmenes Docker persiste entre reinicios de contenedor**: Chrome deja un archivo `SingletonLock` que impide arrancar otra instancia. Si el contenedor muere (rebuild/restart), el lock queda huérfano. Eliminarlo siempre al inicio del proceso Node.js (server.js) Y en el CMD del Dockerfile para cubrir todos los escenarios.
+
+14. **Easypanel `build: null` indica config de build corrupta**: Si `inspectService` muestra `build: null`, los calls a `updateBuild` y `deployService` fallarán silenciosamente o con exit code 1 genérico. Puede ser necesario recrear el servicio desde la UI.
+
+---
+
+## INC-009: Deploy crash loop por SingletonLock + Build fallido
+**Fecha**: 2026-04-27
+**Severidad**: Crítica (servicio completamente caído, no arranca)
+**Síntoma**: Servicio en crash loop infinito. Logs muestran: `The profile appears to be in use by another Chromium process (1427) on another computer (ea4275f73154)`
+**Causa raíz**: El archivo `SingletonLock` en el volumen Docker `chrome-data` persiste entre reinicios del contenedor. Cuando un contenedor muere (durante rebuild/restart), Chrome deja el lock. El nuevo contenedor ve el lock y se niega a arrancar.
+
+**Intentos que NO funcionaron**:
+1. **Fix en `browser.js` (`_launchBrowser`)**: Eliminaba SingletonLock antes de `puppeteer.launch()`. Se commiteó (`4a87e41`) pero Easypanel usaba build cacheado → el fix nunca se ejecutó.
+2. **Fix en `Dockerfile` CMD**: `CMD ["sh", "-c", "rm -f /app/chrome-data/SingletonLock && node src/server.js"]`. El build de Docker fallaba con exit code 1 (sin logs detallados).
+3. **Cambiar build type entre nixpacks y dockerfile**: no resolvió.
+4. **Múltiples `restartService` via Easypanel API**: usaban la imagen vieja → mismo crash.
+5. **`deployService` via Easypanel API**: el build fallaba consistentemente.
+
+**Lecciones**:
+- Easypanel `build: null` en inspectService indica que la config de build se corrompió. Los calls a `updateBuild` no siempre persisten.
+- El campo `commit.sha` en inspectService muestra qué código tiene Easypanel cacheado, no necesariamente el último push.
+- Los `build-arg` del deploy (como `GIT_SHA`) se generan correctamente pero si el build falla no sirve.
+- SingletonLock SIEMPRE debe eliminarse al inicio del proceso Node.js (server.js), no solo en browser.js, para cubrir todos los escenarios.
+- Fix correcto aplicado: doble eliminación en `server.js` (antes de imports) + `Dockerfile` CMD (antes de node).
+
+**Fix final**: Commit `1760103` con eliminación de SingletonLock en `server.js` (líneas 4-16) y `Dockerfile` CMD.
+
+**Estado**: Pendiente de deploy exitoso. El build de Docker sigue fallando en Easypanel.
+
+**Archivos modificados**:
+- `src/server.js` (eliminación de SingletonLock al inicio, líneas 4-16)
+- `Dockerfile` (CMD con `rm -f` antes de `node`)
+
+**Diagnóstico**:
+```bash
+# 1. Verificar logs del contenedor en crash loop
+# Easypanel → Servicio → Logs → buscar "SingletonLock" o "profile appears to be in use"
+
+# 2. Verificar config de build
+# Easypanel API: services.app.inspectService → campo "build"
+# Si build: null → config corrupta
+
+# 3. Verificar commit desplegado
+# Easypanel API: services.app.inspectService → campo "commit.sha"
+# Comparar con `git log --oneline -1` del repo local
+```
+
+**Workaround que SÍ funcionó (sin rebuild)**:
+1. Cambiar `USER_DATA_DIR` de `/app/chrome-data` a `/tmp/chrome-data` via `services.app.updateEnv`
+2. `restartService` → el contenedor arranca usando directorio temporal SIN SingletonLock
+3. Servicio operativo (sesión activa, scraping OK) pero cookies NO persisten entre reinicios
+
+**Acciones pendientes para deploy definitivo**:
+1. Borrar volumen `chrome-data` desde la UI de Easypanel (elimina SingletonLock)
+2. Verificar/limpiar espacio en disco del VPS (`docker system prune -af`)
+3. Restaurar `USER_DATA_DIR=/app/chrome-data` en env vars
+4. Forzar reconstrucción desde la UI de Easypanel (no vía API — `build: null` corrupto)
+5. Si `build: null` persiste → recrear el servicio manualmente

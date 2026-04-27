@@ -39,7 +39,7 @@ workana-autopilot/
 ├── n8n-workflow-retry.json            # Cola de reintentos (cada 15 min, 13 nodos)
 ├── n8n-workflow-feedback.json         # Feedback loop propuestas (9:00, 5 nodos)
 ├── src/
-│   ├── server.js                      # API Express (11 endpoints, puerto 3500)
+│   ├── server.js                      # API Express (11 endpoints, puerto 3500) + SingletonLock cleanup
 │   ├── browser.js                     # BrowserManager: Puppeteer + stealth + UA rotation + fatiga
 │   ├── scraper.js                     # WorkanaScraper: scraping + detalles + feedback multi-página
 │   └── submitter.js                   # ProposalSubmitter: envío MFE-compatible + verificación estricta
@@ -471,14 +471,23 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
   # Usar con: -H "Authorization: Bearer $TOKEN"
   ```
 - **Proyecto/Servicio**: `projectName: "workana"`, `serviceName: "auto-pilot"`
-- **Endpoints clave**:
-  - `services.app.deployService` — Trigger rebuild (POST, `{"json":{"projectName":"workana","serviceName":"auto-pilot"}}`)
-  - `services.app.restartService` — Restart contenedor (POST, mismo body)
-  - `services.app.inspectService` — Ver estado (GET, `?input={"json":{"projectName":"workana","serviceName":"auto-pilot"}}`)
+- **Endpoints que funcionan**:
+  - `services.app.deployService` — Trigger rebuild (POST). NOTA: Falla si `build: null` o Docker tiene problemas
+  - `services.app.restartService` — Restart contenedor sin rebuild (POST). Usa imagen existente
+  - `services.app.inspectService` — Ver estado completo (GET, `?input={"json":{"projectName":"workana","serviceName":"auto-pilot"}}`)
+  - `services.app.updateEnv` — Cambiar env vars (POST, campo `env` con string `\r\n`-separated)
+  - `services.app.updateBuild` — Cambiar tipo de build (POST). No siempre persiste
+  - `services.app.updateDeploy` — Acepta calls pero `command` NO persiste
   - `projects.listProjects` — Listar proyectos (GET)
-  - `projects.inspectProject` — Detalle proyecto (GET, `?input={"json":{"projectName":"workana"}}`)
-- **Deploy webhook directo**: `http://156.67.26.118:3000/api/deploy/4e462ded0af97da9181955bf864eb172790ec843f281724b`
+  - `projects.inspectProject` — Detalle proyecto (GET)
+- **URL alternativa**: `http://156.67.26.118:3000/api/trpc/` (IP directa, solo accesible desde misma red)
+- **Deploy webhook**: `POST http://156.67.26.118:3000/api/deploy/4e462ded0af97da9181955bf864eb172790ec843f281724b` (no funciona desde contenedores internos)
 - **Source**: GitHub `vortekai1/workana-autopilot` rama `main`, autoDeploy: false
+- **IMPORTANTE**: Campos clave de `inspectService`:
+  - `build: null` → config de build corrupta, deploys fallarán
+  - `commit.sha` → código que Easypanel tiene cacheado (puede no ser el último push)
+  - `deploy.command: null` → no se puede cambiar via API
+  - `mounts[0].name: "chrome-data"` → volumen persistente en `/app/chrome-data`
 
 ### Puppeteer Service API (acceso directo)
 - **URL**: `https://workana-auto-pilot.ioefpm.easypanel.host/`
@@ -521,3 +530,12 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
 - **Daily Summary — ejecución en serie**: Los 5 nodos HTTP GET deben encadenarse en SERIE (no paralelo). En n8n v1 execution order, nodos con múltiples inputs se ejecutan cuando llega el primero, no cuando llegan todos. Serial evita `"Node X hasn't been executed"`.
 - **workana_logs schema**: No tiene columna `level`. Columnas: `id`, `action`, `details` (jsonb), `success` (bool), `error_message`, `created_at`.
 - **Easypanel deploy**: El build con Nixpacks + Puppeteer/Chromium tarda 3-8 minutos. El servicio no responde durante el build (404/502). El deploy webhook (`/api/deploy/{token}`) es la forma más directa de triggear un rebuild.
+- **SingletonLock protection**: `server.js` elimina `SingletonLock` y `Lock` de `USER_DATA_DIR` ANTES de importar BrowserManager (líneas 4-16). Previene crash loop cuando el contenedor anterior dejó el lock en el volumen Docker.
+- **Dockerfile ARG directives**: Easypanel pasa env vars como `--build-arg` a `docker buildx build`. El Dockerfile DEBE declarar `ARG` para cada una (`WORKANA_EMAIL`, `WORKANA_PASSWORD`, `PORT`, `HEADLESS`, `USER_DATA_DIR`, `GIT_SHA`), o `buildx` puede fallar con exit code 1.
+- **Easypanel API — limitaciones descubiertas**:
+  - `updateDeploy` con campo `command` NO persiste — siempre queda `null`
+  - `updateBuild` acepta calls pero `build` puede seguir como `null` en `inspectService`
+  - `updateEnv` SÍ funciona — permite cambiar env vars del servicio
+  - No hay endpoints para: build logs, Docker prune, exec/shell, volumen management
+  - Si `build: null` en `inspectService` → config corrupta, necesita intervención desde UI
+- **Workaround SingletonLock sin rebuild**: Cambiar `USER_DATA_DIR` a `/tmp/chrome-data` via `updateEnv` + `restartService`. Evita el lock en el volumen pero cookies no persisten entre reinicios. Solución temporal hasta poder limpiar el volumen desde UI.
