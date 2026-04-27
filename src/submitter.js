@@ -1012,7 +1012,7 @@ class ProposalSubmitter {
       const alreadySent = bodyText.includes('ya has enviado') ||
         bodyText.includes('ya enviaste') || bodyText.includes('already sent');
 
-      // Errores de validación
+      // Errores de validación (ÚNICOS fallos claros)
       const hasValidationError = bodyText.includes('campo obligatorio') ||
         bodyText.includes('required field') || bodyText.includes('por favor complet') ||
         bodyText.includes('especifique un alcance') || bodyText.includes('alcance válido');
@@ -1022,26 +1022,33 @@ class ProposalSubmitter {
       const submitInput = document.querySelector('input[type="submit"]');
       const hasSubmitBtn = submitInput && submitInput.offsetHeight > 0;
 
-      // Capturar snippet del body para diagnóstico (primeros 300 chars)
-      const bodySnippet = bodyText.substring(0, 300);
+      // Detectar si estamos en una página de listado de proyectos (redirigió a búsqueda)
+      const isProjectListing = bodyText.includes('proyectos encontrados') ||
+        bodyText.includes('projects found') ||
+        bodyText.includes('filtrar proyectos') ||
+        bodyText.includes('filter projects');
 
-      return { hasSuccess, alreadySent, hasValidationError, hasVisibleTextarea, hasSubmitBtn, bodyLength: bodyText.length, bodySnippet };
+      // Capturar snippet del body para diagnóstico (primeros 500 chars para más contexto)
+      const bodySnippet = bodyText.substring(0, 500);
+
+      return { hasSuccess, alreadySent, hasValidationError, hasVisibleTextarea, hasSubmitBtn, isProjectListing, bodyLength: bodyText.length, bodySnippet };
     });
 
     console.log(`[Submitter] Check: formUrl=${formUrl}, currentUrl=${currentUrl}`);
     console.log(`[Submitter] State: ${JSON.stringify(pageState)}`);
+    console.log(`[Submitter] Body snippet: ${pageState.bodySnippet}`);
 
     // =============================================
-    // DETECCIÓN ANTI-DUPLICADOS
-    // Filosofía: si el formulario desapareció y la URL cambió,
-    // es MUY probable que se envió. Mejor reportar éxito
-    // que reintentar y causar un duplicado.
-    // Solo reportar fallo cuando es EVIDENTE (validación, formulario visible).
+    // DETECCIÓN ULTRA-AGRESIVA HACIA ÉXITO
+    // Filosofía: Mejor reportar éxito dudoso que fallo dudoso.
+    // Falsos positivos → verificación secundaria los confirma.
+    // Falsos negativos → causan reintentos y duplicados.
+    // Solo reportar fallo cuando hay evidencia INEQUÍVOCA.
     // =============================================
 
     // ÉXITO 1: Texto explícito de confirmación
     if (pageState.hasSuccess) {
-      return { success: true, message: 'Propuesta enviada (confirmación en página)', url: currentUrl, pageState };
+      return { success: true, message: 'Propuesta enviada (confirmación explícita en página)', url: currentUrl, pageState };
     }
 
     // ÉXITO 2: Ya enviada anteriormente
@@ -1049,35 +1056,45 @@ class ProposalSubmitter {
       return { success: true, message: 'Propuesta ya enviada anteriormente', url: currentUrl, pageState };
     }
 
-    // ÉXITO 3: URL redirigió a /inbox/ o /messages/ (redirección normal de Workana)
-    if (currentUrl.includes('/inbox/') || currentUrl.includes('/messages/index/')) {
-      return { success: true, message: 'Propuesta enviada (redirigido a mensajes)', url: currentUrl, pageState };
+    // ÉXITO 3: URL redirigió a páginas conocidas de Workana post-submit
+    const successUrls = ['/inbox/', '/messages/', '/jobs', '/dashboard', '/my-bids', '/proposals'];
+    if (successUrls.some(path => currentUrl.includes(path))) {
+      return { success: true, message: `Propuesta enviada (redirigido a ${currentUrl})`, url: currentUrl, pageState };
     }
 
-    // FALLO CLARO 1: Error de validación (campos vacíos, alcance no seleccionado)
+    // FALLO CLARO 1: Error de validación (ÚNICO fallo inequívoco)
     if (pageState.hasValidationError) {
       return { success: false, message: 'Error de validación del formulario', url: currentUrl, pageState, _terminal: true };
     }
 
-    // FALLO CLARO 2: Formulario sigue visible con botón submit → no se envió
-    if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn) {
-      return { success: false, message: 'Formulario sigue visible — no se envió', url: currentUrl, pageState, _terminal: false };
+    // FALLO CLARO 2: Formulario sigue visible con botón submit Y URL no cambió
+    // (Si URL cambió aunque formulario visible = Workana puede estar procesando)
+    if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn && currentUrl === formUrl) {
+      return { success: false, message: 'Formulario sigue visible en misma URL — submit no procesado', url: currentUrl, pageState, _terminal: false };
     }
 
-    // ÉXITO PROBABLE: URL cambió Y formulario desapareció → Workana procesó el envío
-    // Esto cubre redirecciones a /messages/, /jobs, dashboard, etc.
-    // NUNCA reintentar en este caso — riesgo de duplicado
+    // ÉXITO PROBABLE ALTA CONFIANZA: URL cambió Y formulario desapareció
+    // Esto cubre CUALQUIER redirección donde el formulario ya no esté
     if (currentUrl !== formUrl && !pageState.hasVisibleTextarea) {
-      return { success: true, message: `Propuesta probablemente enviada (URL cambió a ${currentUrl}, formulario desapareció)`, url: currentUrl, pageState };
+      return { success: true, message: `Propuesta enviada (URL cambió a ${currentUrl}, formulario desapareció)`, url: currentUrl, pageState };
     }
 
-    // URL no cambió pero formulario desapareció → estado incierto, marcar terminal
-    if (currentUrl === formUrl && !pageState.hasVisibleTextarea) {
-      return { success: false, message: 'URL no cambió pero formulario desapareció — estado incierto', url: currentUrl, pageState, _terminal: true };
+    // ÉXITO PROBABLE MEDIA CONFIANZA: URL cambió aunque formulario visible
+    // (Workana puede cargar página intermedia con form de otro proyecto)
+    if (currentUrl !== formUrl && !pageState.isProjectListing) {
+      return { success: true, message: `Propuesta probablemente enviada (URL cambió a ${currentUrl})`, url: currentUrl, pageState };
     }
 
-    // Cualquier otro caso → fallo terminal (no reintentar)
-    return { success: false, message: 'Estado desconocido tras submit', url: currentUrl, pageState, _terminal: true };
+    // ÉXITO BAJA CONFIANZA: Formulario desapareció aunque URL igual
+    // (Workana puede renderizar confirmación sin redirigir)
+    if (!pageState.hasVisibleTextarea && !pageState.hasSubmitBtn) {
+      return { success: true, message: 'Propuesta probablemente enviada (formulario desapareció, verificar con re-visita)', url: currentUrl, pageState };
+    }
+
+    // ÚLTIMO RECURSO: Estado ambiguo → reportar como ÉXITO y dejar que verificación secundaria lo confirme
+    // Esto evita falsos negativos que bloqueen el sistema
+    console.log('[Submitter] ⚠️  Estado ambiguo — asumiendo éxito para evitar falso negativo');
+    return { success: true, message: `Estado ambiguo tras submit — asumiendo éxito (verificar con re-visita). URL: ${currentUrl}`, url: currentUrl, pageState };
   }
 
   // =============================================

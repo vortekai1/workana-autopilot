@@ -310,6 +310,114 @@ app.post('/clear-cookies', async (req, res) => {
   }
 });
 
+// Reiniciar browser (fuerza cierre + re-lanzamiento)
+app.post('/restart-browser', async (req, res) => {
+  try {
+    console.log('[Server] Reiniciando browser...');
+
+    // Cerrar browser actual
+    if (browserManager && browserManager.browser) {
+      try {
+        await browserManager.browser.close();
+        console.log('[Server] Browser cerrado');
+      } catch (e) {
+        console.log(`[Server] Error cerrando browser: ${e.message}`);
+      }
+    }
+
+    // Esperar 3s para que el proceso limpie recursos
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Forzar re-lanzamiento
+    browserManager._launchPromise = null;
+    browserManager.browser = null;
+    browserManager.loggedIn = false;
+
+    await browserManager._ensureBrowser();
+
+    const isRunning = browserManager.isRunning();
+    console.log(`[Server] Browser reiniciado. Running: ${isRunning}`);
+
+    res.json({
+      success: true,
+      message: 'Browser reiniciado correctamente',
+      running: isRunning,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[Server] Error reiniciando browser:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Limpiar sesión completa (cookies + restart + re-login)
+app.post('/force-clear-session', async (req, res) => {
+  try {
+    console.log('[Server] Limpieza completa de sesión iniciada...');
+
+    // Paso 1: Limpiar cookies
+    try {
+      await browserManager.enqueue(async () => {
+        const page = await browserManager.newPage();
+        try {
+          const client = await page.createCDPSession();
+          await client.send('Network.clearBrowserCookies');
+          await client.send('Network.clearBrowserCache');
+          await client.detach();
+          console.log('[Server] Cookies limpiadas');
+        } finally {
+          await page.close();
+        }
+      });
+    } catch (e) {
+      console.log(`[Server] Error limpiando cookies: ${e.message}`);
+    }
+
+    // Paso 2: Reiniciar browser
+    if (browserManager && browserManager.browser) {
+      try {
+        await browserManager.browser.close();
+        console.log('[Server] Browser cerrado');
+      } catch (e) {
+        console.log(`[Server] Error cerrando browser: ${e.message}`);
+      }
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    browserManager._launchPromise = null;
+    browserManager.browser = null;
+    browserManager.loggedIn = false;
+
+    await browserManager._ensureBrowser();
+    console.log('[Server] Browser re-lanzado');
+
+    // Paso 3: Intentar login
+    let loginResult;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      loginResult = await browserManager.enqueue(() => browserManager.login());
+      console.log('[Server] Login intentado:', loginResult.success ? 'éxito' : 'fallo');
+    } catch (e) {
+      loginResult = { success: false, message: `Error en login: ${e.message}` };
+      console.log('[Server] Error en login:', e.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Sesión limpiada y browser reiniciado',
+      browserRunning: browserManager.isRunning(),
+      loginSuccess: loginResult.success,
+      loginMessage: loginResult.message,
+      loginUrl: loginResult.url,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[Server] Error en limpieza de sesión:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Tomar screenshot (para debug)
 app.get('/screenshot', async (req, res) => {
   try {

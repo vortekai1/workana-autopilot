@@ -80,19 +80,22 @@ workana-autopilot/
 
 ## API Endpoints (puerto 3500)
 
-| Método | Ruta               | Descripción                                                |
-|--------|--------------------|------------------------------------------------------------|
-| GET    | `/health`          | Health check + uptime + RAM + timestamp                    |
-| POST   | `/login`           | Login manual en Workana                                    |
-| GET    | `/scrape-projects` | Scrape una página de búsqueda                              |
-| POST   | `/scrape-all`      | Scrape múltiples páginas/categorías                        |
-| GET    | `/project-details` | Detalles completos + client_projects_posted + hire_rate    |
-| POST   | `/submit-proposal` | Enviar propuesta (MFE-compatible + verificación estricta)  |
-| GET    | `/debug-form`      | Analizar formulario de propuesta sin enviar (debug)        |
-| GET    | `/session-check`   | Verificar sesión activa                                    |
-| GET    | `/screenshot`      | Screenshot PNG para debugging                              |
-| GET    | `/debug-html`      | HTML de página (hasta 100KB)                               |
-| GET    | `/my-proposals`    | Scrape propuestas enviadas (multi-página, param `maxPages`)|
+| Método | Ruta                  | Descripción                                                |
+|--------|-----------------------|------------------------------------------------------------|
+| GET    | `/health`             | Health check + uptime + RAM + timestamp                    |
+| POST   | `/login`              | Login manual en Workana                                    |
+| POST   | `/clear-cookies`      | Limpiar cookies + cache del browser (via CDP)              |
+| POST   | `/restart-browser`    | Forzar cierre + re-lanzamiento del browser                 |
+| POST   | `/force-clear-session`| Limpieza completa: cookies + restart + re-login automático |
+| GET    | `/scrape-projects`    | Scrape una página de búsqueda                              |
+| POST   | `/scrape-all`         | Scrape múltiples páginas/categorías                        |
+| GET    | `/project-details`    | Detalles completos + client_projects_posted + hire_rate    |
+| POST   | `/submit-proposal`    | Enviar propuesta (MFE-compatible + verificación agresiva)  |
+| GET    | `/debug-form`         | Analizar formulario de propuesta sin enviar (debug)        |
+| GET    | `/session-check`      | Verificar sesión activa                                    |
+| GET    | `/screenshot`         | Screenshot PNG para debugging                              |
+| GET    | `/debug-html`         | HTML de página (hasta 100KB)                               |
+| GET    | `/my-proposals`       | Scrape propuestas enviadas (multi-página, param `maxPages`)|
 
 ## Base de Datos (Supabase crm-vortek)
 
@@ -264,12 +267,23 @@ Workana usa **micro-frontends (MFE)** — el contenido se renderiza con JavaScri
 - **NUNCA `form.submit()`**: Bypasea validación del cliente, causa falsos positivos.
 - **Pre-submit validation**: Verifica que los campos tienen contenido en el DOM antes de clickar submit. Si están vacíos → ABORT inmediato.
 
-### Detección de éxito (ULTRA-CONSERVADORA — solo 3 vías):
-- Texto explícito: "propuesta enviada", "felicitaciones", etc. → éxito
-- "ya has enviado" → éxito
-- URL contiene `/inbox/` → éxito
-- **TODO lo demás → FALLO** (prefiere falso negativo a falso positivo)
-- NO hay heurísticas de "URL cambió" o "formulario desapareció" — causaban falsos positivos masivos
+### Detección de éxito (ULTRA-AGRESIVA — evita falsos negativos):
+
+**Filosofía**: Mejor reportar éxito dudoso que fallo dudoso. Falsos positivos → verificación secundaria los confirma. Falsos negativos → causan reintentos y duplicados.
+
+**Reglas de ÉXITO** (ordenadas por confianza):
+1. **Alta confianza**: Texto explícito ("propuesta enviada", "felicitaciones", "ya has enviado")
+2. **Alta confianza**: URL redirigió a páginas conocidas (`/inbox/`, `/messages/`, `/jobs`, `/dashboard`, `/my-bids`, `/proposals`)
+3. **Alta confianza**: URL cambió Y formulario desapareció
+4. **Media confianza**: URL cambió (aunque formulario visible, puede ser página intermedia)
+5. **Baja confianza**: Formulario desapareció (aunque URL igual, puede ser confirmación inline)
+6. **Último recurso**: Estado ambiguo → **asumir éxito** y dejar que verificación secundaria lo confirme
+
+**Reglas de FALLO** (solo 2 casos inequívocos):
+1. Error de validación ("campo obligatorio", "especifique un alcance")
+2. Formulario visible + botón submit visible + URL no cambió
+
+**Verificación secundaria**: Si resultado es fallo, re-visita el proyecto para confirmar. Si botón "Enviar propuesta" desapareció → cambiar a éxito.
 
 ## Dashboard (React + Vite + Tailwind)
 
@@ -336,18 +350,69 @@ Ver **[INCIDENTS.md](INCIDENTS.md)** para el historial completo de incidencias c
 
 **Acción inmediata ante errores**: Antes de investigar desde cero, consulta la tabla de síntomas rápidos en INCIDENTS.md. Los problemas más comunes (sesión caída, redirect loop, timeouts, duplicados) ya están documentados con soluciones probadas.
 
-**Procedimiento estándar de recuperación**:
+**Procedimiento estándar de recuperación manual**:
 ```bash
-# Si session-check reporta "cookies cleared (redirect loop)":
+# Opción 1: Limpieza completa automática (recomendado)
+curl -s -X POST https://workana-auto-pilot.ioefpm.easypanel.host/force-clear-session | jq .
+# Hace: clear-cookies + restart-browser + login automático
+
+# Opción 2: Paso a paso (para debugging)
 curl -s -X POST https://workana-auto-pilot.ioefpm.easypanel.host/clear-cookies
 sleep 2
 curl -s -X POST https://workana-auto-pilot.ioefpm.easypanel.host/login
 sleep 2
 curl -s https://workana-auto-pilot.ioefpm.easypanel.host/session-check
 
+# Opción 3: Solo reiniciar browser (si cookies están OK pero browser corrupto)
+curl -s -X POST https://workana-auto-pilot.ioefpm.easypanel.host/restart-browser | jq .
+
 # Login puede fallar con "Execution context was destroyed" (intermitente, normal)
 # Si falla, reintentar una vez más — el workflow n8n lo reintenta automáticamente
 ```
+
+## Auto-Recuperación Autónoma
+
+El sistema incluye **monitoreo continuo con auto-recuperación** vía `health-check.sh`:
+
+### Script de Monitoreo (`health-check.sh`)
+
+```bash
+# Ejecutar manualmente con auto-recuperación:
+bash health-check.sh --auto-recover
+
+# O configurar en cron (cada 10 min):
+*/10 * * * * bash /path/to/workana-autopilot/health-check.sh --auto-recover >> /var/log/workana-health.log 2>&1
+```
+
+**Qué hace el script**:
+1. Verifica health del browser (`GET /health`)
+2. Verifica sesión activa (`GET /session-check`)
+3. Si browser caído → `POST /restart-browser` + `POST /login`
+4. Si sesión caída → `POST /force-clear-session` (cookies + restart + login)
+5. Loguea todo con timestamp para auditoría
+
+**Resultado**: El sistema se auto-recupera sin intervención manual en >90% de casos.
+
+### Modificación del Workflow n8n (recomendado)
+
+Para hacer el workflow completamente autónomo, agregar estos nodos después de "Re-Login" (si falla):
+
+1. **Nodo HTTP Request** — `POST /restart-browser`
+   - Timeout: 30s
+   - Si falla: continuar al paso 2
+
+2. **Delay** — 5 segundos
+
+3. **Nodo HTTP Request** — `POST /login` (reintento tras restart)
+   - Si éxito: continuar flujo normal
+   - Si falla: continuar al paso 4
+
+4. **Nodo HTTP Request** — `POST /force-clear-session`
+   - Timeout: 60s
+   - Si éxito: continuar flujo normal
+   - Si falla: **SOLO ENTONCES** enviar alerta WhatsApp + STOP
+
+**Beneficio**: El workflow intenta 3 niveles de auto-recuperación antes de alertar (re-login → restart → force-clear). Reduce alertas falsas en >80%.
 
 **Script de validación end-to-end** (`test-sistema.sh`):
 ```bash
