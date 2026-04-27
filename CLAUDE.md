@@ -338,7 +338,15 @@ Ver **[INCIDENTS.md](INCIDENTS.md)** para el historial completo de incidencias c
 
 **Procedimiento estándar de recuperación**:
 ```bash
-curl -s POST /clear-cookies → POST /login → GET /session-check
+# Si session-check reporta "cookies cleared (redirect loop)":
+curl -s -X POST https://workana-auto-pilot.ioefpm.easypanel.host/clear-cookies
+sleep 2
+curl -s -X POST https://workana-auto-pilot.ioefpm.easypanel.host/login
+sleep 2
+curl -s https://workana-auto-pilot.ioefpm.easypanel.host/session-check
+
+# Login puede fallar con "Execution context was destroyed" (intermitente, normal)
+# Si falla, reintentar una vez más — el workflow n8n lo reintenta automáticamente
 ```
 
 **Script de validación end-to-end** (`test-sistema.sh`):
@@ -361,6 +369,9 @@ Verifica:
 - Solo recibes `🤖❌ ERROR EN ENVÍO AUTO` en WhatsApp por >24h
 - Proyectos con `status=proposal_generated` y `auto_sent=true` acumulándose sin cambiar a `sent`
 - Login retorna `success: true` pero URL no incluye 'workana.com'
+
+**Errores normales (NO CRÍTICOS, ignorar si < 2h)**:
+- `Error de login: Execution context was destroyed` — ocurre cuando Workana redirige rápido. Auto-corrige en siguiente ejecución (30 min)
 
 ## Notas de Desarrollo
 
@@ -387,4 +398,4 @@ Verifica:
 - **Task scopes abort**: Si TODOS los task scopes estan vacios (taskScopesFilled === 0), el submitter aborta — Workana rechaza formularios con scopes obligatorios sin rellenar.
 - **Scraper parseNum mejorado**: Regex \x5b\\d,.\x5d+ con replace para parsear numeros con separadores de miles.
 - **Retry workflow PATCH**: PATCH Proyecto Sent usa workana_url=eq.projectUrl (no id=eq.projectId), porque retry_queue no tiene project_id.
-- **CRÍTICO — Validación de login (INC-008)**: El método `login()` en `browser.js` DEBE validar que `page.url()` incluye 'workana.com' Y empieza con 'https://'. NUNCA asumir que "no está en /login = login exitoso". Cuando el browser está corrupto (redirect loop), puede retornar URLs como `chrome-error://chromewebdata/` que no incluyen '/login', causando falsos positivos de login exitoso y loops infinitos. Ver [browser.js:258-273](src/browser.js#L258-L273) para implementación correcta.
+- **CRÍTICO — Validación de login (INC-008)**: El método `login()` en `browser.js` DEBE validar que `page.url()` incluye 'workana.com' Y empieza con 'https://'. NUNCA asumir que "no está en /login = login exitoso". Cuando el browser está corrupto (redirect loop), puede retornar URLs como `chrome-error://chromewebdata/` que no incluyen '/login', causando falsos positivos de login exitoso y loops infinitos. Ver [browser.js:258-273](src/browser.js#L258-L273) para implementación correcta. IMPORTANTE: Usar `let` para `currentUrl` (línea 259) en vez de `const` — se reasigna en líneas 297 y 384. Redeclarar con `const` causa `SyntaxError` que impide arranque del servicio.

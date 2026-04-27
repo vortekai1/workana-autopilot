@@ -311,9 +311,26 @@ bash test-sistema.sh
 **Archivos modificados**:
 - `src/browser.js` (login method, líneas 258-273)
 - `test-sistema.sh` (nuevo archivo de validación)
-- Commit: [cfeea49](https://github.com/vortekai1/workana-autopilot/commit/cfeea49)
+- Commits:
+  - [cfeea49](https://github.com/vortekai1/workana-autopilot/commit/cfeea49) - Fix validación URL
+  - [0d76f0f](https://github.com/vortekai1/workana-autopilot/commit/0d76f0f) - Fix SyntaxError variable redeclarada
 
-**Estado**: Resuelto. Esperando rebuild + validación con `test-sistema.sh`.
+**Problema secundario — SyntaxError en rebuild**:
+Tras aplicar el fix inicial, el servicio crasheaba al arrancar:
+```
+SyntaxError: Identifier 'currentUrl' has already been declared
+at /app/src/browser.js:396
+```
+
+**Causa**: Al agregar validación en línea 259, declaré `const currentUrl` pero el código ya declaraba esta variable en líneas 309 y 396 dentro del mismo método `login()`.
+
+**Fix**: Cambiar primera declaración a `let` (línea 259) y reutilizar variable en líneas 309 y 396 (asignación en vez de re-declaración).
+
+**Estado**: ✅ Resuelto y validado.
+- Browser: corriendo
+- Login: funciona (tras clear-cookies manual)
+- Scraping: 9 proyectos encontrados
+- Propuestas pendientes: 5 con score ≥85 listas para envío
 
 ---
 
@@ -338,3 +355,7 @@ bash test-sistema.sh
 9. **Los flags booleanos en memoria (como `loggedIn`) pueden quedar stale**: El flag `this.loggedIn` puede decir `true` mientras la sesión real está caída. SIEMPRE verificar con navegación real (como hace `checkSession()`), no confiar solo en el flag. En caso de duda, priorizar evidencia de navegación sobre flags en memoria.
 
 10. **Propuestas con `auto_sent=true` pero `status!=sent` = señal de alerta**: Si hay proyectos con `status=proposal_generated` y `auto_sent=true` acumulándose por días, el sistema está intentando enviar pero fallando silenciosamente. Monitorear esta métrica como KPI de salud del sistema.
+
+11. **Evitar redeclaración de variables en funciones largas**: En funciones de >100 líneas (como `login()`), usar `let` para variables que pueden necesitar reasignación múltiple. Si declaras con `const` al inicio y luego necesitas el mismo nombre en diferentes bloques, causarás `SyntaxError: Identifier 'X' has already been declared`. Mejor: declarar una vez con `let` y reutilizar, o usar nombres diferentes. En INC-008, `currentUrl` se declaró 3 veces con `const` → crash al arrancar servicio.
+
+12. **"Execution context was destroyed" en login es normal e intermitente**: Este error de Puppeteer ocurre cuando Workana redirige rápido del /login al /dashboard (si hay cookies válidas). El workflow n8n tiene retry automático cada 30 min, así que un fallo puntual se auto-corrige. Solo actuar si persiste >2 horas. El error NO indica problema grave, solo navegación rápida.
