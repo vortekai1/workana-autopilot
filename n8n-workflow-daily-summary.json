@@ -50,17 +50,17 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_projects?select=id,status,relevance_score&created_at=gte.{{ $json.startISO }}&created_at=lt.{{ $json.endISO }}",
+        "url": "={{ $('CONFIG').first().json.SUPABASE_URL }}/rest/v1/workana_projects?select=id,status,relevance_score&created_at=gte.{{ $('Calcular Fechas').first().json.startISO }}&created_at=lt.{{ $('Calcular Fechas').first().json.endISO }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "apikey",
-              "value": "={{ $json.SUPABASE_KEY }}"
+              "value": "={{ $('CONFIG').first().json.SUPABASE_KEY }}"
             },
             {
               "name": "Authorization",
-              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+              "value": "=Bearer {{ $('CONFIG').first().json.SUPABASE_KEY }}"
             }
           ]
         },
@@ -80,17 +80,17 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_proposals?select=id,budget_suggested&created_at=gte.{{ $json.startISO }}&created_at=lt.{{ $json.endISO }}",
+        "url": "={{ $('CONFIG').first().json.SUPABASE_URL }}/rest/v1/workana_proposals?select=id,budget_suggested&created_at=gte.{{ $('Calcular Fechas').first().json.startISO }}&created_at=lt.{{ $('Calcular Fechas').first().json.endISO }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "apikey",
-              "value": "={{ $json.SUPABASE_KEY }}"
+              "value": "={{ $('CONFIG').first().json.SUPABASE_KEY }}"
             },
             {
               "name": "Authorization",
-              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+              "value": "=Bearer {{ $('CONFIG').first().json.SUPABASE_KEY }}"
             }
           ]
         },
@@ -110,17 +110,17 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_logs?select=id&created_at=gte.{{ $json.startISO }}&created_at=lt.{{ $json.endISO }}&success=eq.false",
+        "url": "={{ $('CONFIG').first().json.SUPABASE_URL }}/rest/v1/workana_logs?select=id&created_at=gte.{{ $('Calcular Fechas').first().json.startISO }}&created_at=lt.{{ $('Calcular Fechas').first().json.endISO }}&success=eq.false",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "apikey",
-              "value": "={{ $json.SUPABASE_KEY }}"
+              "value": "={{ $('CONFIG').first().json.SUPABASE_KEY }}"
             },
             {
               "name": "Authorization",
-              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+              "value": "=Bearer {{ $('CONFIG').first().json.SUPABASE_KEY }}"
             }
           ]
         },
@@ -140,17 +140,17 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_proposals?select=id&created_at=gte.{{ $json.weekStartISO }}",
+        "url": "={{ $('CONFIG').first().json.SUPABASE_URL }}/rest/v1/workana_proposals?select=id&created_at=gte.{{ $('Calcular Fechas').first().json.weekStartISO }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "apikey",
-              "value": "={{ $json.SUPABASE_KEY }}"
+              "value": "={{ $('CONFIG').first().json.SUPABASE_KEY }}"
             },
             {
               "name": "Authorization",
-              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+              "value": "=Bearer {{ $('CONFIG').first().json.SUPABASE_KEY }}"
             }
           ]
         },
@@ -170,17 +170,17 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $json.SUPABASE_URL }}/rest/v1/workana_retry_queue?select=id&status=eq.pending",
+        "url": "={{ $('CONFIG').first().json.SUPABASE_URL }}/rest/v1/workana_retry_queue?select=id&status=eq.pending",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
             {
               "name": "apikey",
-              "value": "={{ $json.SUPABASE_KEY }}"
+              "value": "={{ $('CONFIG').first().json.SUPABASE_KEY }}"
             },
             {
               "name": "Authorization",
-              "value": "=Bearer {{ $json.SUPABASE_KEY }}"
+              "value": "=Bearer {{ $('CONFIG').first().json.SUPABASE_KEY }}"
             }
           ]
         },
@@ -240,8 +240,8 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "",
-          "name": "Evolution API"
+          "id": "kunHKxAoeGnCmdVk",
+          "name": "evolution vortek"
         }
       }
     }
@@ -349,7 +349,8 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": true
+    "saveManualExecutions": true,
+    "timezone": "Europe/Madrid"
   },
   "tags": [
     {
