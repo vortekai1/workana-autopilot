@@ -331,10 +331,8 @@ class ProposalSubmitter {
     }
 
     // 10. Enviar formulario
-    // Estrategia: click nativo en el botón submit primero (más fiable — simula acción real del usuario),
-    // luego requestSubmit() como fallback solo si el click no funcionó.
-    // NOTA: requestSubmit() puede fallar si hay múltiples forms en la página (ej: chat lateral)
-    // y activar el form incorrecto, causando redirección a /jobs.
+    // Estrategia: click nativo primero, luego requestSubmit('#bidForm') como fallback.
+    // requestSubmit() apunta al form CORRECTO (#bidForm) para evitar activar forms laterales.
     log('10. Enviando formulario...');
 
     const submitInfo = await this._findSubmitButton(page);
@@ -379,17 +377,41 @@ class ProposalSubmitter {
 
     log(`10. Método de submit: ${submitMethod}`);
 
+    // 11. Esperar resultado — navegación O cambio en la página
+    log('11. Esperando resultado (hasta 12s para navegación o cambio en página)...');
+    await this._waitForSubmitResult(page, formUrl);
+
+    // 11b. Verificar si la URL cambió tras el primer intento de submit
+    let postSubmitUrl;
+    try { postSubmitUrl = page.url(); } catch (_) { postSubmitUrl = 'unknown'; }
+    const urlChanged = postSubmitUrl !== formUrl;
+    log(`11b. URL post-submit: ${postSubmitUrl} (cambió: ${urlChanged})`);
+
+    // 11c. Si el click nativo NO produjo navegación, usar requestSubmit en #bidForm como backup
+    // requestSubmit() pasa por la validación del browser igual que un click real
+    if (!urlChanged && submitInfo.hasForm) {
+      log('11c. Click no produjo navegación — intentando requestSubmit en #bidForm...');
+      const requestSubmitOk = await page.evaluate(() => {
+        const form = document.querySelector('#bidForm');
+        if (form && typeof form.requestSubmit === 'function') {
+          try { form.requestSubmit(); return true; } catch (e) { return false; }
+        }
+        return false;
+      });
+
+      if (requestSubmitOk) {
+        submitMethod = 'requestSubmit';
+        log('11c. requestSubmit en #bidForm OK — esperando resultado...');
+        await this._waitForSubmitResult(page, formUrl);
+      } else {
+        log('11c. requestSubmit no disponible o falló');
+      }
+    }
+
     if (submitMethod === 'none' && !submitInfo.hasForm) {
       if (debug) screenshots[`noSubmitBtn_${attempt}`] = await page.screenshot({ encoding: 'base64' }).catch(() => null);
       return { success: false, message: 'No se pudo enviar el formulario', formInfo, _terminal: false };
     }
-
-    // 11. Esperar resultado — navegación O cambio en la página
-    // IMPORTANTE: Solo UN submit. NO reintentar con requestSubmit ni clicks adicionales.
-    // Si el click del paso 10 funcionó pero Workana tarda en procesar, los re-submits
-    // interfieren y causan estados inconsistentes.
-    log('11. Esperando resultado (hasta 10s para navegación o cambio en página)...');
-    await this._waitForSubmitResult(page);
 
     let finalUrl;
     try { finalUrl = page.url(); } catch (_) { finalUrl = 'unknown (page closed)'; }
@@ -1026,6 +1048,7 @@ class ProposalSubmitter {
 
   async _checkSubmissionResult(page, formUrl) {
     const currentUrl = page.url();
+    const urlChanged = currentUrl !== formUrl;
 
     const pageState = await page.evaluate(() => {
       const bodyText = document.body?.innerText?.toLowerCase() || '';
@@ -1047,36 +1070,34 @@ class ProposalSubmitter {
         bodyText.includes('required field') || bodyText.includes('por favor complet') ||
         bodyText.includes('especifique un alcance') || bodyText.includes('alcance válido');
 
-      // Formulario todavía presente
-      const hasVisibleTextarea = [...document.querySelectorAll('textarea')].some(t => t.offsetHeight > 20);
-      const submitInput = document.querySelector('input[type="submit"]');
+      // Formulario de propuesta todavía presente (bid form, NO chat textarea)
+      const bidTextarea = document.querySelector('textarea[name="bid[content]"]');
+      const hasVisibleBidForm = bidTextarea && bidTextarea.offsetHeight > 20;
+      const submitInput = document.querySelector('input[type="submit"][value*="nviar"]') ||
+        document.querySelector('input[type="submit"][value*="resupuesto"]');
       const hasSubmitBtn = submitInput && submitInput.offsetHeight > 0;
 
-      // Detectar si estamos en una página de listado de proyectos (redirigió a búsqueda)
-      const isProjectListing = bodyText.includes('proyectos encontrados') ||
-        bodyText.includes('projects found') ||
-        bodyText.includes('filtrar proyectos') ||
-        bodyText.includes('filter projects');
-
-      // Capturar snippet del body para diagnóstico (primeros 500 chars para más contexto)
+      // Capturar snippet del body para diagnóstico
       const bodySnippet = bodyText.substring(0, 500);
 
-      return { hasSuccess, alreadySent, hasValidationError, hasVisibleTextarea, hasSubmitBtn, isProjectListing, bodyLength: bodyText.length, bodySnippet };
+      return { hasSuccess, alreadySent, hasValidationError, hasVisibleBidForm, hasSubmitBtn, bodyLength: bodyText.length, bodySnippet };
     });
 
-    console.log(`[Submitter] Check: formUrl=${formUrl}, currentUrl=${currentUrl}`);
+    console.log(`[Submitter] Check: formUrl=${formUrl}, currentUrl=${currentUrl}, urlChanged=${urlChanged}`);
     console.log(`[Submitter] State: ${JSON.stringify(pageState)}`);
-    console.log(`[Submitter] Body snippet: ${pageState.bodySnippet}`);
 
     // =============================================
-    // DETECCIÓN ULTRA-AGRESIVA HACIA ÉXITO
-    // Filosofía: Mejor reportar éxito dudoso que fallo dudoso.
-    // Falsos positivos → verificación secundaria los confirma.
-    // Falsos negativos → causan reintentos y duplicados.
-    // Solo reportar fallo cuando hay evidencia INEQUÍVOCA.
+    // DETECCIÓN v3 — INC-010 fix
+    // Workana ahora sirve el formulario en /messages/bid/{slug}.
+    // Tras éxito REAL, redirige a /inbox/{slug}/{username}?added=...
+    // El check anterior usaba /messages/ como indicador de éxito,
+    // pero eso es la URL del formulario → falso positivo masivo.
+    //
+    // Regla clave: SOLO confiar en URL si realmente CAMBIÓ (urlChanged).
+    // La verificación secundaria (_verifyAlreadySent) cubre ambigüedades.
     // =============================================
 
-    // ÉXITO 1: Texto explícito de confirmación
+    // ÉXITO 1: Texto explícito de confirmación (máxima confianza)
     if (pageState.hasSuccess) {
       return { success: true, message: 'Propuesta enviada (confirmación explícita en página)', url: currentUrl, pageState };
     }
@@ -1086,45 +1107,51 @@ class ProposalSubmitter {
       return { success: true, message: 'Propuesta ya enviada anteriormente', url: currentUrl, pageState };
     }
 
-    // ÉXITO 3: URL redirigió a páginas conocidas de Workana post-submit
-    const successUrls = ['/inbox/', '/messages/', '/jobs', '/dashboard', '/my-bids', '/proposals'];
-    if (successUrls.some(path => currentUrl.includes(path))) {
-      return { success: true, message: `Propuesta enviada (redirigido a ${currentUrl})`, url: currentUrl, pageState };
+    // ÉXITO 3: URL cambió a /inbox/ con parámetro ?added= (redirección de éxito de Workana)
+    if (urlChanged && currentUrl.includes('/inbox/')) {
+      return { success: true, message: `Propuesta enviada (redirigido a inbox: ${currentUrl})`, url: currentUrl, pageState };
     }
 
-    // FALLO CLARO 1: Error de validación (ÚNICO fallo inequívoco)
+    // ÉXITO 4: URL tiene ?added= o ?bid=1 (parámetros de confirmación de Workana)
+    if (currentUrl.includes('added=') || currentUrl.includes('bid=1')) {
+      return { success: true, message: `Propuesta enviada (URL con params de confirmación: ${currentUrl})`, url: currentUrl, pageState };
+    }
+
+    // FALLO CLARO 1: Error de validación
     if (pageState.hasValidationError) {
       return { success: false, message: 'Error de validación del formulario', url: currentUrl, pageState, _terminal: true };
     }
 
-    // FALLO CLARO 2: Formulario sigue visible con botón submit Y URL no cambió
-    // (Si URL cambió aunque formulario visible = Workana puede estar procesando)
-    if (pageState.hasVisibleTextarea && pageState.hasSubmitBtn && currentUrl === formUrl) {
-      return { success: false, message: 'Formulario sigue visible en misma URL — submit no procesado', url: currentUrl, pageState, _terminal: false };
-    }
-
-    // ÉXITO PROBABLE ALTA CONFIANZA: URL cambió Y formulario desapareció
-    // Esto cubre CUALQUIER redirección donde el formulario ya no esté
-    if (currentUrl !== formUrl && !pageState.hasVisibleTextarea) {
+    // ÉXITO 5: URL cambió a CUALQUIER otra página que NO sea el formulario
+    // (cubre /inbox/, /dashboard, /jobs, etc.)
+    if (urlChanged && !pageState.hasVisibleBidForm) {
       return { success: true, message: `Propuesta enviada (URL cambió a ${currentUrl}, formulario desapareció)`, url: currentUrl, pageState };
     }
 
-    // ÉXITO PROBABLE MEDIA CONFIANZA: URL cambió aunque formulario visible
-    // (Workana puede cargar página intermedia con form de otro proyecto)
-    if (currentUrl !== formUrl && !pageState.isProjectListing) {
+    // ÉXITO 6: URL cambió aunque el form sigue visible
+    // (Workana puede estar cargando página intermedia)
+    if (urlChanged) {
       return { success: true, message: `Propuesta probablemente enviada (URL cambió a ${currentUrl})`, url: currentUrl, pageState };
     }
 
-    // ÉXITO BAJA CONFIANZA: Formulario desapareció aunque URL igual
-    // (Workana puede renderizar confirmación sin redirigir)
-    if (!pageState.hasVisibleTextarea && !pageState.hasSubmitBtn) {
-      return { success: true, message: 'Propuesta probablemente enviada (formulario desapareció, verificar con re-visita)', url: currentUrl, pageState };
+    // --- A partir de aquí: URL NO cambió (currentUrl === formUrl) ---
+
+    // FALLO CLARO 2: URL no cambió Y formulario visible con botón submit
+    // El submit no se procesó — el formulario sigue intacto
+    if (pageState.hasVisibleBidForm && pageState.hasSubmitBtn) {
+      return { success: false, message: 'Formulario intacto en misma URL — submit no procesado', url: currentUrl, pageState, _terminal: false };
     }
 
-    // ÚLTIMO RECURSO: Estado ambiguo → reportar como ÉXITO y dejar que verificación secundaria lo confirme
-    // Esto evita falsos negativos que bloqueen el sistema
-    console.log('[Submitter] ⚠️  Estado ambiguo — asumiendo éxito para evitar falso negativo');
-    return { success: true, message: `Estado ambiguo tras submit — asumiendo éxito (verificar con re-visita). URL: ${currentUrl}`, url: currentUrl, pageState };
+    // FALLO PROBABLE: URL no cambió Y formulario visible (botón puede haber desaparecido temporalmente)
+    // NO asumir éxito solo porque el botón desapareció — el MFE puede haberlo ocultado sin enviar
+    if (pageState.hasVisibleBidForm) {
+      return { success: false, message: 'URL no cambió y formulario visible — submit probablemente no procesado', url: currentUrl, pageState, _terminal: false };
+    }
+
+    // AMBIGUO: URL no cambió pero formulario desapareció
+    // Posible confirmación inline de Workana — dejar que _verifyAlreadySent lo confirme
+    console.log('[Submitter] URL no cambió pero formulario desapareció — resultado ambiguo');
+    return { success: false, message: `Ambiguo: URL no cambió (${currentUrl}) pero formulario desapareció — verificar con re-visita`, url: currentUrl, pageState, _terminal: false };
   }
 
   // =============================================
@@ -1174,9 +1201,9 @@ class ProposalSubmitter {
   // ESPERAR RESULTADO DEL SUBMIT (navegación o cambio en página)
   // =============================================
 
-  async _waitForSubmitResult(page) {
+  async _waitForSubmitResult(page, formUrl) {
     await Promise.race([
-      page.waitForNavigation({ timeout: 10000 }).catch(() => null),
+      page.waitForNavigation({ timeout: 12000 }).catch(() => null),
       page.waitForFunction(
         () => {
           const text = document.body.innerText.toLowerCase();
@@ -1184,8 +1211,14 @@ class ProposalSubmitter {
             text.includes('felicitaciones') || text.includes('proposal sent') ||
             text.includes('especifique un alcance') || text.includes('campo obligatorio');
         },
-        { timeout: 10000 }
+        { timeout: 12000 }
       ).catch(() => null),
+      // Detectar cambio de URL (Workana redirige a /inbox/ tras éxito vía MFE sin navigation event)
+      formUrl ? page.waitForFunction(
+        (fUrl) => window.location.href !== fUrl,
+        { timeout: 12000 },
+        formUrl
+      ).catch(() => null) : new Promise(resolve => setTimeout(resolve, 12000)),
     ]);
     await this.bm.randomDelay(1500, 2500);
   }

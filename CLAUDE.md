@@ -251,38 +251,47 @@ Workana usa **micro-frontends (MFE)** — el contenido se renderiza con JavaScri
 3. Click "Enviar una propuesta" (texto + CSS fallbacks)
 4. Manejar "Área protegida" si aparece (ingresa contraseña automáticamente)
 5. Esperar formulario (textarea visible)
-6. Rellenar propuesta con **native setter** (MFE-compatible)
-7. Rellenar presupuesto con **native setter** + `page.type()`
+6. Rellenar propuesta con `execCommand('insertText')` (MFE-compatible)
+7. Rellenar presupuesto con `execCommand('insertText')`
 8. Seleccionar hasta 5 habilidades (checkboxes visibles)
 9. Seleccionar hasta 3 portfolio (botón "+", NUNCA click en button[type=submit])
 10. Rellenar task scopes con `page.select()` nativo de Puppeteer
 11. Verificar estado de campos (`_verifyFormState`)
 12. Click submit con `page.click()` nativo de Puppeteer
-13. Fallback: `form.requestSubmit()` (NUNCA `form.submit()` — bypasea validación)
-14. Verificar resultado con reglas conservadoras
+13. Si click no produce navegación → backup `requestSubmit('#bidForm')` (NUNCA `form.submit()`)
+14. Verificar resultado con detección v3 (INC-010)
+
+### URL del formulario (actualizado abril 2026):
+- **Form URL**: `https://www.workana.com/messages/bid/{slug}` (formulario de propuesta)
+- **Success URL**: `https://www.workana.com/inbox/{slug}/{username}?added=...&bid=1` (redirección tras éxito)
+- **IMPORTANTE**: `/messages/bid/` es la URL del FORMULARIO, NO indicador de éxito
 
 ### Compatibilidad MFE — Técnicas clave:
 - **`execCommand('insertText')`**: Inserta texto a través del pipeline del navegador — TODOS los frameworks MFE (React/Vue/Angular) lo reconocen. Mucho más fiable que `el.value = ...` o native setters que pueden fallar silenciosamente.
 - **`page.select()`**: Puppeteer nativo para selects (task scopes). `sel.value = ...` no dispara eventos del framework.
 - **`page.click()`**: Click nativo de Puppeteer para submit (simula mouseover→mousedown→mouseup→click). Más fiable que `el.click()` programático.
+- **`requestSubmit('#bidForm')`**: Backup si click nativo no produce navegación. A diferencia de `form.submit()`, pasa por la validación del browser. Se apunta por ID al form correcto para evitar activar forms laterales.
 - **NUNCA `form.submit()`**: Bypasea validación del cliente, causa falsos positivos.
 - **Pre-submit validation**: Verifica que los campos tienen contenido en el DOM antes de clickar submit. Si están vacíos → ABORT inmediato.
 
-### Detección de éxito (ULTRA-AGRESIVA — evita falsos negativos):
+### Detección de éxito (v3 — INC-010 fix):
 
-**Filosofía**: Mejor reportar éxito dudoso que fallo dudoso. Falsos positivos → verificación secundaria los confirma. Falsos negativos → causan reintentos y duplicados.
+**Filosofía**: Solo reportar éxito cuando hay evidencia real. La verificación secundaria (`_verifyAlreadySent`) cubre casos ambiguos.
+
+**Regla clave**: TODA comprobación de URL requiere `urlChanged` (currentUrl !== formUrl). NUNCA usar la URL actual como indicador si no cambió.
 
 **Reglas de ÉXITO** (ordenadas por confianza):
-1. **Alta confianza**: Texto explícito ("propuesta enviada", "felicitaciones", "ya has enviado")
-2. **Alta confianza**: URL redirigió a páginas conocidas (`/inbox/`, `/messages/`, `/jobs`, `/dashboard`, `/my-bids`, `/proposals`)
-3. **Alta confianza**: URL cambió Y formulario desapareció
-4. **Media confianza**: URL cambió (aunque formulario visible, puede ser página intermedia)
-5. **Baja confianza**: Formulario desapareció (aunque URL igual, puede ser confirmación inline)
-6. **Último recurso**: Estado ambiguo → **asumir éxito** y dejar que verificación secundaria lo confirme
+1. **Máxima confianza**: Texto explícito ("propuesta enviada", "felicitaciones", "ya has enviado")
+2. **Alta confianza**: URL cambió a `/inbox/` (redirección post-submit de Workana)
+3. **Alta confianza**: URL contiene `?added=` o `?bid=1` (parámetros de confirmación)
+4. **Alta confianza**: URL cambió Y formulario `textarea[name="bid[content]"]` desapareció
+5. **Media confianza**: URL cambió (aunque formulario visible)
 
-**Reglas de FALLO** (solo 2 casos inequívocos):
+**Reglas de FALLO**:
 1. Error de validación ("campo obligatorio", "especifique un alcance")
-2. Formulario visible + botón submit visible + URL no cambió
+2. URL no cambió Y formulario `bid[content]` visible con botón submit → submit no procesado
+3. URL no cambió Y formulario `bid[content]` visible (sin botón) → submit probablemente no procesado
+4. URL no cambió Y formulario desapareció → ambiguo → FALLO (verificación secundaria lo confirma)
 
 **Verificación secundaria**: Si resultado es fallo, re-visita el proyecto para confirmar. Si botón "Enviar propuesta" desapareció → cambiar a éxito.
 
@@ -548,6 +557,7 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
   - No hay endpoints para: build logs, Docker prune, exec/shell, volumen management
   - Si `build: null` en `inspectService` → config corrupta, necesita intervención desde UI
 - **Workaround SingletonLock sin rebuild**: Cambiar `USER_DATA_DIR` a `/tmp/chrome-data` via `updateEnv` + `restartService`. Evita el lock en el volumen pero cookies no persisten entre reinicios. Solución temporal hasta poder limpiar el volumen desde UI.
+- **INC-010 — Falso positivo por URL del formulario (abril 2026)**: Workana movió el formulario de propuesta a `/messages/bid/{slug}`. La detección de éxito tenía `/messages/` en la lista de URLs de éxito → SIEMPRE matcheaba. Fix: `_checkSubmissionResult` v3 requiere `urlChanged` (currentUrl !== formUrl) para toda comprobación basada en URL. Éxito real redirige a `/inbox/{slug}/{username}?added=...&bid=1`. Backup: `requestSubmit('#bidForm')` si click nativo no produce navegación. Usar `textarea[name="bid[content]"]` para detectar formulario (no `textarea` genérico).
 
 ## Guía Rápida de Problemas Comunes
 
@@ -562,3 +572,4 @@ curl -X PUT "https://n8n.vortekai.es/api/v1/workflows/aKvMgB1ox27Fg8Kr" \
 | Propuestas stuck proposal_generated | Verificar sesión → si OK, esperar feedback loop (9:00) | - |
 | Daily Summary falla | Verificar que GETs van en SERIE en n8n (no paralelo) | - |
 | Categorías con GTM script | Verificar scraper.js usa selectores específicos, no `[class*="category"]` | - |
+| Propuestas falso positivo (se reportan enviadas pero no lo están) | Verificar `_checkSubmissionResult` compara URL actual vs formUrl | - |

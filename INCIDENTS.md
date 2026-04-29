@@ -18,6 +18,7 @@
 | Solo errores en WhatsApp, 0 propuestas enviadas por días | [INC-008](#inc-008) | Bug login acepta URLs corruptas → fix en browser.js:258 |
 | Crash loop: `profile appears to be in use by another Chromium process` | [INC-009](#inc-009) | Eliminar SingletonLock del volumen chrome-data (o borrar volumen desde UI) |
 | Build de Easypanel falla con exit code 1 genérico | [INC-009](#inc-009) | Verificar `build: null` en inspectService → recrear servicio si config corrupta |
+| WhatsApp dice ✅ ENVIADO pero propuestas NO aparecen en Workana | [INC-010](#inc-010) | Workana cambió form URL a /messages/bid/ → falso positivo en detección |
 
 ---
 
@@ -372,6 +373,16 @@ at /app/src/browser.js:396
 
 17. **Tras borrar volumen chrome-data, la sesión se pierde**: El workflow n8n detecta sesión caída, hace re-login, y continúa. No requiere intervención manual. Tiempo de recuperación: ≤30 min (siguiente ejecución del cron).
 
+18. **NUNCA usar URLs estáticas como indicador de éxito sin verificar que cambiaron**: Workana puede mover el formulario a una ruta diferente (ej: de `/job/.../bid` a `/messages/bid/...`). Si la lista de "success URLs" incluye la ruta del formulario, TODO se reporta como éxito. **Regla**: siempre verificar `currentUrl !== formUrl` antes de evaluar la URL como indicador de éxito.
+
+19. **La URL `/messages/bid/{slug}` es el formulario, NO confirmación de envío**: Desde ~abril 2026, Workana sirve el formulario de propuesta en `/messages/bid/`. Tras envío exitoso, redirige a `/inbox/{slug}/{username}?added=...&bid=1`. `/messages/` ya NO es indicador de éxito.
+
+20. **`hasVisibleTextarea` debe buscar el textarea ESPECÍFICO del bid, no cualquier textarea**: La página `/messages/bid/` combina el formulario de propuesta con un chat/mensajes. Hay múltiples textareas. Usar `textarea[name="bid[content]"]` para detectar si el formulario de propuesta sigue visible, no un selector genérico.
+
+21. **`requestSubmit('#bidForm')` como backup de click nativo**: Si `page.click()` en el botón submit no produce navegación, `form.requestSubmit()` apuntando a `#bidForm` por ID es un backup viable. A diferencia de `form.submit()`, `requestSubmit()` pasa por la validación del browser. Apuntar por ID evita activar forms laterales (búsqueda, chat).
+
+22. **Los envíos exitosos son ~8-10s más rápidos que los fallidos**: Envíos reales (~32s) navegan inmediatamente a `/inbox/`. Envíos fallidos (~40s) esperan el timeout completo de `_waitForSubmitResult` porque no hay navegación. Esta diferencia es un indicador útil para debugging.
+
 ---
 
 ## INC-009: Deploy crash loop por SingletonLock + Build fallido
@@ -443,3 +454,92 @@ at /app/src/browser.js:396
 - `server.js` elimina locks al inicio (antes de importar BrowserManager)
 - `browser.js` elimina locks antes de cada `puppeteer.launch()`
 - Doble protección garantiza que nunca vuelva a ocurrir crash loop por SingletonLock
+
+---
+
+## INC-010: Falso positivo masivo — WhatsApp dice "enviado" pero propuestas no se envían
+**Fecha**: 2026-04-29
+**Severidad**: Crítica (solo ~25% de propuestas se envían realmente)
+**Duración del impacto**: ~2 días (27-29 abril)
+**Síntoma**: WhatsApp envía `🤖✅ ENVIADO AUTOMÁTICAMENTE` pero al revisar en Workana, la mayoría de propuestas NO aparecen. Solo ~2/8 propuestas recientes son reales.
+
+**Causa raíz**: Workana cambió la URL del formulario de propuestas. El formulario ahora se sirve en `/messages/bid/{slug}` (antes estaba en otra ruta). El código de detección de éxito (`_checkSubmissionResult`) tenía `/messages/` en su lista de URLs de éxito:
+
+```javascript
+// ANTES (BUG — INC-010):
+const successUrls = ['/inbox/', '/messages/', '/jobs', '/dashboard', '/my-bids', '/proposals'];
+if (successUrls.some(path => currentUrl.includes(path))) {
+  return { success: true, ... }; // ← FALSO POSITIVO: el form ya está en /messages/bid/
+}
+```
+
+Como el formulario YA estaba en una URL con `/messages/`, este check SIEMPRE reportaba éxito — incluso cuando el submit fallaba y la URL no cambiaba.
+
+**Evidencia de ejecuciones de n8n**:
+
+| Proyecto | formUrl | finalUrl | ¿URL cambió? | ¿Real en Workana? |
+|----------|---------|----------|--------------|-------------------|
+| Pasarelas de Pago | `/messages/bid/...` | `/inbox/.../alex-...?added=208758984&bid=1` | ✅ SÍ | ✅ SÍ |
+| Supabase Auth | `/messages/bid/...` | `/inbox/.../alex-...` | ✅ SÍ | ✅ SÍ |
+| Shopify (40s) | `/messages/bid/...` | `/messages/bid/...` | ❌ NO | ❌ NO |
+| Funnelish (40s) | `/messages/bid/...` | `/messages/bid/...` | ❌ NO | ❌ NO |
+
+Patrón claro: cuando el envío FUNCIONA, Workana redirige de `/messages/bid/` a `/inbox/{slug}/{username}?added=...`. Cuando FALLA, la URL no cambia.
+
+**Cascada de fallos**:
+1. `_checkSubmissionResult` matchea `/messages/` en la URL del formulario → retorna `success: true`
+2. Como `success: true`, la verificación secundaria `_verifyAlreadySent` (línea 426) NUNCA se ejecuta
+3. El nodo "Resultado Auto" en n8n recibe `success: true` → envía WhatsApp ✅
+4. El proyecto se marca como `status: sent` en Supabase
+5. Nunca entra en retry queue (porque fue "éxito")
+6. La propuesta nunca se envió realmente
+
+**Problema secundario — submit falla silenciosamente en ~75% de casos**:
+- El formulario se rellena correctamente (verificado en `fieldValues`)
+- El click en `input[type="submit"]` se ejecuta (botón desaparece)
+- Pero NO se produce navegación → el MFE de Workana puede no estar procesando el submit
+- Los envíos exitosos (~32s) son más rápidos que los fallidos (~40s) — los 8s extra son el timeout esperando navegación
+
+**Solución aplicada** (3 cambios):
+
+1. **Reescritura de `_checkSubmissionResult` (v3)**:
+   - Eliminado `/messages/` de successUrls (ya no es indicador de éxito, es la URL del formulario)
+   - TODA comprobación de URL requiere `urlChanged` (currentUrl !== formUrl)
+   - `/inbox/` con `?added=` como indicador de máxima confianza
+   - Si URL no cambió Y formulario visible → FALLO (no éxito)
+   - `hasVisibleBidForm` busca `textarea[name="bid[content]"]` específicamente (no cualquier textarea, porque la página tiene textareas del chat)
+
+2. **Backup `requestSubmit('#bidForm')`**:
+   - Si el click nativo no produce navegación, se intenta `form.requestSubmit()` en el form correcto (`#bidForm`)
+   - `requestSubmit()` (a diferencia de `form.submit()`) pasa por la validación del browser
+   - Se apunta al form por ID para evitar activar forms laterales (búsqueda, chat)
+
+3. **Mejora de `_waitForSubmitResult`**:
+   - Añadido `waitForFunction` que detecta cambio de URL vía `window.location.href !== formUrl`
+   - Cubre redirecciones MFE que no disparan el evento `navigation` de Puppeteer
+   - Timeout subido a 12s (de 10s) para dar más margen
+
+**Archivos modificados**:
+- `src/submitter.js` (`_checkSubmissionResult`, `_singleSubmitAttempt` paso 10-11, `_waitForSubmitResult`)
+
+**Validación post-deploy**:
+```bash
+# 1. Health + sesión
+curl -s https://workana-auto-pilot.ioefpm.easypanel.host/health | jq .
+curl -s https://workana-auto-pilot.ioefpm.easypanel.host/session-check | jq .
+
+# 2. Esperar siguiente ejecución del workflow (cada 30 min)
+# Verificar en WhatsApp: ¿sigue apareciendo ✅ o ahora aparece ❌?
+# Si aparece ❌ = detección funciona correctamente, propuestas entran en retry queue
+
+# 3. Verificar propuestas REALES en Workana tras 2-3 ejecuciones
+# Comparar con /my-proposals y con la web de Workana
+
+# 4. Monitorear logs de n8n para ver formUrl vs finalUrl
+```
+
+**Prevención**:
+- NUNCA usar URLs estáticas como indicador de éxito sin verificar que la URL realmente CAMBIÓ
+- El formulario de Workana puede cambiar de ruta sin previo aviso
+- La única señal fiable de éxito es: (a) texto explícito de confirmación, (b) URL cambió a una ruta diferente, o (c) re-visita confirma ausencia del botón "Enviar propuesta"
+- Mantener `_verifyAlreadySent` como safety net — siempre debe ejecutarse cuando el resultado primario no es éxito claro
