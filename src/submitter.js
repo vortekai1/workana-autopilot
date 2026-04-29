@@ -343,7 +343,7 @@ class ProposalSubmitter {
       return { success: false, message: 'No se encontró botón submit ni formulario', formInfo, _terminal: false };
     }
 
-    // Scroll al botón submit y cerrar cookies antes de submit
+    // Scroll al botón submit y cerrar cookies/overlays antes de submit
     if (submitInfo.found) {
       await page.evaluate(() => {
         const btn = document.querySelector('[data-wk-submit="1"]');
@@ -353,8 +353,26 @@ class ProposalSubmitter {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     }
     await this.bm.randomDelay(1000, 2000);
+
+    // Cerrar cookies/overlays DOS veces — OneTrust puede re-aparecer tras scroll
+    await this._dismissCookieConsent(page);
+    await this.bm.randomDelay(300, 500);
     await this._dismissCookieConsent(page);
     await this.bm.randomDelay(500, 800);
+
+    // Verificar que el botón NO está obstruido antes de clickar
+    if (submitInfo.found && submitInfo.isObstructed) {
+      log(`10. ⚠️ Botón obstruido por ${submitInfo.obstructedBy} — forzando limpieza de overlays...`);
+      await page.evaluate(() => {
+        // Remover TODOS los elementos con position fixed y z-index alto
+        const allFixed = [...document.querySelectorAll('*')].filter(el => {
+          const style = window.getComputedStyle(el);
+          return style.position === 'fixed' && parseInt(style.zIndex || 0) > 100;
+        });
+        allFixed.forEach(el => { el.style.display = 'none'; });
+      });
+      await this.bm.randomDelay(300, 500);
+    }
 
     let submitMethod = 'none';
 
@@ -1229,20 +1247,52 @@ class ProposalSubmitter {
 
   async _dismissCookieConsent(page) {
     const dismissed = await page.evaluate(() => {
+      // 1. OneTrust (usado por Workana) — botón con ID estándar
+      const onetrust = document.querySelector('#onetrust-accept-btn-handler');
+      if (onetrust && onetrust.offsetHeight > 0) {
+        onetrust.click();
+        return 'onetrust';
+      }
+
+      // 2. OneTrust banner completo — cerrar si existe
+      const onetrustBanner = document.querySelector('#onetrust-banner-sdk');
+      if (onetrustBanner && onetrustBanner.offsetHeight > 0) {
+        // Intentar botón de cerrar
+        const closeBtn = onetrustBanner.querySelector('#onetrust-close-btn-container button, .onetrust-close-btn-handler');
+        if (closeBtn) { closeBtn.click(); return 'onetrust-close'; }
+        // Forzar ocultar si no hay botón
+        onetrustBanner.style.display = 'none';
+        return 'onetrust-hidden';
+      }
+
+      // 3. Búsqueda genérica por texto (fallback para otros banners)
       const buttons = [...document.querySelectorAll('button')];
       const cookieBtn = buttons.find(b => {
         const text = (b.textContent || '').trim().toLowerCase();
         return text.includes('aceptar todas las cookies') || text.includes('accept all cookies') ||
-          text.includes('aceptar cookies') || text.includes('accept cookies');
+          text.includes('aceptar cookies') || text.includes('accept cookies') ||
+          text.includes('aceptar todo') || text.includes('accept all') ||
+          text.includes('acepto') || text.includes('i agree');
       });
       if (cookieBtn && cookieBtn.offsetHeight > 0) {
         cookieBtn.click();
-        return true;
+        return 'generic';
       }
+
+      // 4. Eliminar overlays que puedan bloquear clicks (z-index > 9999)
+      const overlays = [...document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="backdrop"]')];
+      for (const overlay of overlays) {
+        const style = window.getComputedStyle(overlay);
+        if (style.position === 'fixed' && parseInt(style.zIndex) > 9999 && overlay.offsetHeight > 0) {
+          overlay.style.display = 'none';
+          return 'overlay-removed';
+        }
+      }
+
       return false;
     });
     if (dismissed) {
-      console.log('[Submitter] Cookie consent cerrado');
+      console.log(`[Submitter] Cookie/overlay cerrado: ${dismissed}`);
       await this.bm.randomDelay(500, 1000);
     }
     return dismissed;
